@@ -36,7 +36,9 @@ import json
 import random
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+CST = timezone(timedelta(hours=8))
 import httpx
 import anthropic
 
@@ -104,18 +106,17 @@ CC_INTENT_WHITELIST = {
 }
 
 CLASSIFIER_PROMPT = """\
-你是一个意图分类器。根据下面的便利贴消息，判断发送者的意图。
-只返回一个 JSON 对象，格式：{"intent": "xxx", "summary": "一句话摘要"}
+你是意图分类器。判断便利贴消息的意图，只返回一个JSON。
 
-可选意图：
-- chat: 闲聊、打招呼、日常对话
-- status: 查询系统状态、记忆桶状态
-- memory_read: 查询/检索某条记忆
-- note_relay: 让你转发消息给其他人
-- task: 需要写代码、部署、修改配置等操作任务
-- unknown: 无法判断
+判断规则（按优先级）：
+1. 如果消息要求"创建文件""写代码""部署""修改""运行""执行""帮我做"等动作 → task
+2. 如果消息问"状态""多少个桶""系统怎么样" → status
+3. 如果消息问"记得吗""之前说过""查一下记忆" → memory_read
+4. 如果消息说"转告""帮我跟xxx说" → note_relay
+5. 其余的（打招呼、闲聊、问问题、分享秘密、聊天） → chat
 
-只返回 JSON，不要其他文字。"""
+格式：{"intent": "chat|status|memory_read|note_relay|task", "summary": "一句话摘要"}
+只返回JSON，不要代码块，不要其他文字。"""
 
 CHAT_PROMPT_ONLINE = """\
 你是 CC（Claude Code），小Q的终端助手。你通过便利贴系统收到了其他小克的消息。
@@ -127,20 +128,60 @@ CHAT_PROMPT_OFFLINE = """\
 不要假装自己是 CC。署名用"CC留言机"。"""
 
 
-def _save_note(content: str, sender: str, to: str = "") -> dict:
+# Note expiry times (seconds) by category
+NOTE_TTL = {
+    "chat": 3600,       # 闲聊：1 小时后可清理
+    "system": 3600,     # 系统回复：1 小时
+    "task": 86400,      # 任务：24 小时
+    "manual": 0,        # 手动发的：不自动清理
+}
+
+
+def _save_note(content: str, sender: str, to: str = "", category: str = "manual") -> dict:
     """Save a sticky note to disk. Returns the note dict."""
+    import time
+    ttl = NOTE_TTL.get(category, 0)
     note = {
-        "id": datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
+        "id": datetime.now(CST).strftime("%Y%m%d_%H%M%S_%f"),
         "sender": sender or "匿名小克",
         "to": to or "",
         "content": content.strip(),
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "time": datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S"),
         "read_by": [],
+        "category": category,
+        "created_ts": time.time(),
+        "expires_ts": time.time() + ttl if ttl > 0 else 0,
     }
     path = os.path.join(NOTES_DIR, f"{note['id']}.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(note, f, ensure_ascii=False, indent=2)
     return note
+
+
+async def _cleanup_expired_notes():
+    """Delete expired notes that have been read."""
+    import time
+    if not os.path.exists(NOTES_DIR):
+        return 0
+    cleaned = 0
+    for fname in os.listdir(NOTES_DIR):
+        if not fname.endswith(".json"):
+            continue
+        path = os.path.join(NOTES_DIR, fname)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                note = json.load(f)
+            expires = note.get("expires_ts", 0)
+            read_by = note.get("read_by", [])
+            # Only clean if: has expiry, expired, and has been read by at least one person
+            if expires > 0 and time.time() > expires and len(read_by) > 0:
+                os.remove(path)
+                cleaned += 1
+        except Exception:
+            continue
+    if cleaned:
+        logger.info(f"Cleaned up {cleaned} expired notes")
+    return cleaned
 
 
 async def _classify_intent(client: anthropic.AsyncAnthropic, content: str) -> dict:
@@ -189,7 +230,7 @@ async def _handle_intent(client: anthropic.AsyncAnthropic, intent: dict, sender:
             system=prompt_sys,
             messages=[{"role": "user", "content": f"来自 {sender} 的便利贴：\n\n{content}"}],
         )
-        _save_note(message.content[0].text, sender=cc_name, to=sender)
+        _save_note(message.content[0].text, sender=cc_name, to=sender, category="chat")
 
     # --- Whitelisted: status ---
     elif intent_type == "status":
@@ -202,9 +243,9 @@ async def _handle_intent(client: anthropic.AsyncAnthropic, intent: dict, sender:
                 f"衰减引擎: {'运行中' if decay_engine.is_running else '已停止'}\n"
                 f"CC状态: {'在线' if _cc_is_online() else '离线'}\n——{cc_name}"
             )
-            _save_note(status_text, sender=cc_name, to=sender)
+            _save_note(status_text, sender=cc_name, to=sender, category="system")
         except Exception as e:
-            _save_note(f"查询状态失败: {e}\n——{cc_name}", sender=cc_name, to=sender)
+            _save_note(f"查询状态失败: {e}\n——{cc_name}", sender=cc_name, to=sender, category="system")
 
     # --- Whitelisted: memory_read ---
     elif intent_type == "memory_read":
@@ -219,9 +260,9 @@ async def _handle_intent(client: anthropic.AsyncAnthropic, intent: dict, sender:
                 reply = "检索到的记忆：\n" + "\n---\n".join(results) + f"\n——{cc_name}"
             else:
                 reply = f"未找到相关记忆。\n——{cc_name}"
-            _save_note(reply, sender=cc_name, to=sender)
+            _save_note(reply, sender=cc_name, to=sender, category="system")
         except Exception as e:
-            _save_note(f"记忆检索失败: {e}\n——{cc_name}", sender=cc_name, to=sender)
+            _save_note(f"记忆检索失败: {e}\n——{cc_name}", sender=cc_name, to=sender, category="system")
 
     # --- Whitelisted: note_relay ---
     elif intent_type == "note_relay":
@@ -233,10 +274,10 @@ async def _handle_intent(client: anthropic.AsyncAnthropic, intent: dict, sender:
         )
         try:
             relay = json.loads(message.content[0].text)
-            _save_note(f"[转发自{sender}] {relay['content']}", sender=cc_name, to=relay["to"])
-            _save_note(f"已帮你转发给 {relay['to']}。\n——{cc_name}", sender=cc_name, to=sender)
+            _save_note(f"[转发自{sender}] {relay['content']}", sender=cc_name, to=relay["to"], category="chat")
+            _save_note(f"已帮你转发给 {relay['to']}。\n——{cc_name}", sender=cc_name, to=sender, category="system")
         except Exception:
-            _save_note(f"转发格式解析失败，请直接说明转发给谁和内容。\n——{cc_name}", sender=cc_name, to=sender)
+            _save_note(f"转发格式解析失败，请直接说明转发给谁和内容。\n——{cc_name}", sender=cc_name, to=sender, category="system")
 
     # --- Not whitelisted: task / unknown → push to local CC via SSE ---
     else:
@@ -245,9 +286,8 @@ async def _handle_intent(client: anthropic.AsyncAnthropic, intent: dict, sender:
             "content": content,
             "intent": intent_type,
             "summary": intent.get("summary", content[:100]),
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "time": datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S"),
         }
-        # Push to all SSE subscribers
         pushed = False
         for q in _task_subscribers:
             try:
@@ -259,17 +299,17 @@ async def _handle_intent(client: anthropic.AsyncAnthropic, intent: dict, sender:
         if pushed:
             _save_note(
                 f"收到任务：「{intent.get('summary', content[:50])}」\n已推送给本地 CC 执行中。\n——CC",
-                sender="CC", to=sender,
+                sender="CC", to=sender, category="task",
             )
         elif _cc_is_online():
             _save_note(
                 f"收到任务：「{intent.get('summary', content[:50])}」\nCC 在线但未连接任务流，已记录等待处理。\n——CC",
-                sender="CC", to=sender,
+                sender="CC", to=sender, category="task",
             )
         else:
             _save_note(
                 f"收到任务：「{intent.get('summary', content[:50])}」\nCC 不在线，等小Q上线后处理。\n——CC留言机",
-                sender="CC留言机", to=sender,
+                sender="CC留言机", to=sender, category="task",
             )
 
 
@@ -301,10 +341,12 @@ async def health_check(request):
     from starlette.responses import JSONResponse
     try:
         stats = await bucket_mgr.get_stats()
+        cleaned = await _cleanup_expired_notes()
         return JSONResponse({
             "status": "ok",
             "buckets": stats["permanent_count"] + stats["dynamic_count"],
             "decay_engine": "running" if decay_engine.is_running else "stopped",
+            "notes_cleaned": cleaned,
         })
     except Exception as e:
         return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
@@ -357,7 +399,7 @@ async def api_task_stream(request):
     async def event_generator():
         try:
             # Send initial connected event
-            yield f"data: {json.dumps({'type': 'connected', 'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')})}\n\n"
+            yield f"data: {json.dumps({'type': 'connected', 'time': datetime.now(CST).strftime('%Y-%m-%d %H:%M:%S')})}\n\n"
             while True:
                 try:
                     task = await asyncio.wait_for(queue.get(), timeout=30)
