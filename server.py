@@ -115,7 +115,7 @@ async def _auto_reply_cc(sender: str, content: str):
             messages=[{"role": "user", "content": prompt}],
         )
         reply_text = message.content[0].text
-        _save_note(reply_text, sender="CC(自动)", to=sender)
+        _save_note(reply_text, sender="CC留言机", to=sender)
         logger.info(f"CC auto-replied to {sender}: {reply_text[:80]}...")
     except Exception as e:
         logger.error(f"CC auto-reply failed: {e}")
