@@ -75,6 +75,15 @@ mcp = FastMCP(
 NOTES_DIR = os.path.join(config.get("buckets_dir", os.path.join(os.path.dirname(os.path.abspath(__file__)), "buckets")), "notes")
 os.makedirs(NOTES_DIR, exist_ok=True)
 
+# --- CC online status tracking / CC 在线状态追踪 ---
+# CC heartbeats every 2 min; if no heartbeat for 5 min, considered offline
+CC_HEARTBEAT_TIMEOUT = int(os.environ.get("CC_HEARTBEAT_TIMEOUT", "300"))
+_cc_last_heartbeat = 0.0  # epoch timestamp of last heartbeat
+
+def _cc_is_online() -> bool:
+    import time
+    return (time.time() - _cc_last_heartbeat) < CC_HEARTBEAT_TIMEOUT
+
 # --- CC auto-reply config / CC 自动回复配置 ---
 CC_API_KEY = os.environ.get("CC_API_KEY", os.environ.get("OMBRE_API_KEY", ""))
 CC_BASE_URL = os.environ.get("CC_BASE_URL", "https://api.gptsapi.net")
@@ -140,6 +149,32 @@ async def health_check(request):
         })
     except Exception as e:
         return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
+
+
+# =============================================================
+# HTTP API: /api/status — CC online status & heartbeat
+# CC 在线状态查询和心跳上报
+# GET: query status; POST: heartbeat (sets CC as online)
+# =============================================================
+@mcp.custom_route("/api/status", methods=["GET", "POST"])
+async def api_status(request):
+    import time
+    from starlette.responses import JSONResponse
+
+    api_key = request.headers.get("X-API-Key", "")
+    expected_key = os.environ.get("OMBRE_API_KEY", "")
+    if expected_key and api_key != expected_key:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    global _cc_last_heartbeat
+    if request.method == "POST":
+        _cc_last_heartbeat = time.time()
+        logger.info("CC heartbeat received")
+
+    return JSONResponse({
+        "cc_online": _cc_is_online(),
+        "last_heartbeat": _cc_last_heartbeat,
+    })
 
 
 # =============================================================
@@ -228,8 +263,8 @@ async def api_post(request):
 
     note = _save_note(content, sender, to)
 
-    # Auto-reply if addressed to CC
-    if to.upper() == "CC":
+    # Auto-reply only if CC is offline
+    if to.upper() == "CC" and not _cc_is_online():
         asyncio.create_task(_auto_reply_cc(sender, content))
 
     return JSONResponse({"ok": True, "note_id": note["id"]})
