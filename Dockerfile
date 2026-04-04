@@ -18,10 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project files / 复制项目文件
 COPY *.py .
 COPY config.example.yaml ./config.yaml
-
-# Persistent mount point: bucket data from host
-# 持久化挂载点：记忆数据从宿主机挂进来
-VOLUME ["/data"]
+COPY buckets ./buckets
 
 # Default to streamable-http for container (remote access)
 # 容器场景默认用 streamable-http
