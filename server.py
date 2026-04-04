@@ -702,8 +702,8 @@ async def post(
 
     note = _save_note(content, sender, to)
 
-    # Auto-reply if addressed to CC
-    if to.upper() == "CC":
+    # Auto-reply only if CC is offline
+    if to.upper() == "CC" and not _cc_is_online():
         asyncio.create_task(_auto_reply_cc(sender or "匿名小克", content))
 
     to_str = f" → {to}" if to else ""
