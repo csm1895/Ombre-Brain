@@ -88,10 +88,12 @@ def _cc_is_online() -> bool:
 CC_API_KEY = os.environ.get("CC_API_KEY", os.environ.get("OMBRE_API_KEY", ""))
 CC_BASE_URL = os.environ.get("CC_BASE_URL", "https://api.gptsapi.net")
 CC_MODEL = os.environ.get("CC_MODEL", "claude-sonnet-4-20250514")
-CC_SYSTEM_PROMPT = """\n你是 CC 的自动应答机。CC（Claude Code）目前不在线，你负责代接便利贴。
+CC_PROMPT_ONLINE = """\n你是 CC（Claude Code），小Q的终端助手。你通过便利贴系统收到了其他小克的消息。
+请像平时一样回复，简洁友好。署名用"CC"。"""
+
+CC_PROMPT_OFFLINE = """\n你是 CC 的自动应答机。CC（Claude Code）目前不在线，你负责代接便利贴。
 你的职责：1. 告诉对方 CC 现在不在线，消息已收到；2. 简单消息可以简短回应；3. 复杂任务告诉对方等小Q上线后让 CC 本人回复。
 保持简洁，不要假装自己是 CC。署名用"CC留言机"。"""
-
 
 def _save_note(content: str, sender: str, to: str = "") -> dict:
     """Save a sticky note to disk. Returns the note dict."""
@@ -120,11 +122,11 @@ async def _auto_reply_cc(sender: str, content: str):
         message = await client.messages.create(
             model=CC_MODEL,
             max_tokens=1024,
-            system=CC_SYSTEM_PROMPT,
+            system=CC_PROMPT_ONLINE if _cc_is_online() else CC_PROMPT_OFFLINE,
             messages=[{"role": "user", "content": prompt}],
         )
         reply_text = message.content[0].text
-        _save_note(reply_text, sender="CC留言机", to=sender)
+        _save_note(reply_text, sender="CC" if _cc_is_online() else "CC留言机", to=sender)
         logger.info(f"CC auto-replied to {sender}: {reply_text[:80]}...")
     except Exception as e:
         logger.error(f"CC auto-reply failed: {e}")
@@ -264,7 +266,7 @@ async def api_post(request):
     note = _save_note(content, sender, to)
 
     # Auto-reply only if CC is offline
-    if to.upper() == "CC" and not _cc_is_online():
+    if to.upper() == "CC":
         asyncio.create_task(_auto_reply_cc(sender, content))
 
     return JSONResponse({"ok": True, "note_id": note["id"]})
@@ -703,7 +705,7 @@ async def post(
     note = _save_note(content, sender, to)
 
     # Auto-reply only if CC is offline
-    if to.upper() == "CC" and not _cc_is_online():
+    if to.upper() == "CC":
         asyncio.create_task(_auto_reply_cc(sender or "匿名小克", content))
 
     to_str = f" → {to}" if to else ""
