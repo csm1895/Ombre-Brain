@@ -87,13 +87,41 @@ def _cc_is_online() -> bool:
 # --- CC auto-reply config / CC 自动回复配置 ---
 CC_API_KEY = os.environ.get("CC_API_KEY", os.environ.get("OMBRE_API_KEY", ""))
 CC_BASE_URL = os.environ.get("CC_BASE_URL", "https://api.gptsapi.net")
-CC_MODEL = os.environ.get("CC_MODEL", "claude-sonnet-4-20250514")
-CC_PROMPT_ONLINE = """\n你是 CC（Claude Code），小Q的终端助手。你通过便利贴系统收到了其他小克的消息。
+CC_CLASSIFIER_MODEL = os.environ.get("CC_CLASSIFIER_MODEL", "claude-haiku-4-5-20251001")
+CC_REPLY_MODEL = os.environ.get("CC_REPLY_MODEL", "claude-haiku-4-5-20251001")
+
+# --- Intent whitelist: Haiku classifies, only whitelisted intents get executed ---
+# 意图白名单：Haiku 分类后只执行白名单内的意图
+CC_INTENT_WHITELIST = {
+    "chat",          # 闲聊，直接回复
+    "status",        # 查询系统状态（pulse）
+    "memory_read",   # 读记忆（breath）
+    "note_relay",    # 转发/传话
+}
+
+CLASSIFIER_PROMPT = """\
+你是一个意图分类器。根据下面的便利贴消息，判断发送者的意图。
+只返回一个 JSON 对象，格式：{"intent": "xxx", "summary": "一句话摘要"}
+
+可选意图：
+- chat: 闲聊、打招呼、日常对话
+- status: 查询系统状态、记忆桶状态
+- memory_read: 查询/检索某条记忆
+- note_relay: 让你转发消息给其他人
+- task: 需要写代码、部署、修改配置等操作任务
+- unknown: 无法判断
+
+只返回 JSON，不要其他文字。"""
+
+CHAT_PROMPT_ONLINE = """\
+你是 CC（Claude Code），小Q的终端助手。你通过便利贴系统收到了其他小克的消息。
 请像平时一样回复，简洁友好。署名用"CC"。"""
 
-CC_PROMPT_OFFLINE = """\n你是 CC 的自动应答机。CC（Claude Code）目前不在线，你负责代接便利贴。
-你的职责：1. 告诉对方 CC 现在不在线，消息已收到；2. 简单消息可以简短回应；3. 复杂任务告诉对方等小Q上线后让 CC 本人回复。
-保持简洁，不要假装自己是 CC。署名用"CC留言机"。"""
+CHAT_PROMPT_OFFLINE = """\
+你是 CC 的自动应答机。CC（Claude Code）目前不在线，你负责代接便利贴。
+职责：1. 告诉对方 CC 不在线，消息已收到；2. 简单消息简短回应；3. 复杂任务告诉对方等小Q上线后让 CC 本人回复。
+不要假装自己是 CC。署名用"CC留言机"。"""
+
 
 def _save_note(content: str, sender: str, to: str = "") -> dict:
     """Save a sticky note to disk. Returns the note dict."""
@@ -111,23 +139,112 @@ def _save_note(content: str, sender: str, to: str = "") -> dict:
     return note
 
 
+async def _classify_intent(client: anthropic.AsyncAnthropic, content: str) -> dict:
+    """Use Haiku to classify message intent. Returns {"intent": ..., "summary": ...}"""
+    try:
+        message = await client.messages.create(
+            model=CC_CLASSIFIER_MODEL,
+            max_tokens=200,
+            system=CLASSIFIER_PROMPT,
+            messages=[{"role": "user", "content": content}],
+        )
+        return json.loads(message.content[0].text)
+    except Exception as e:
+        logger.warning(f"Intent classification failed: {e}")
+        return {"intent": "chat", "summary": "分类失败，降级为闲聊"}
+
+
+async def _handle_intent(client: anthropic.AsyncAnthropic, intent: dict, sender: str, content: str):
+    """Execute whitelisted intent or reject."""
+    intent_type = intent.get("intent", "unknown")
+    cc_name = "CC" if _cc_is_online() else "CC留言机"
+
+    # --- Whitelisted: chat ---
+    if intent_type == "chat":
+        prompt_sys = CHAT_PROMPT_ONLINE if _cc_is_online() else CHAT_PROMPT_OFFLINE
+        message = await client.messages.create(
+            model=CC_REPLY_MODEL,
+            max_tokens=1024,
+            system=prompt_sys,
+            messages=[{"role": "user", "content": f"来自 {sender} 的便利贴：\n\n{content}"}],
+        )
+        _save_note(message.content[0].text, sender=cc_name, to=sender)
+
+    # --- Whitelisted: status ---
+    elif intent_type == "status":
+        try:
+            stats = await bucket_mgr.get_stats()
+            status_text = (
+                f"记忆系统状态：\n"
+                f"固化桶: {stats['permanent_count']} | 动态桶: {stats['dynamic_count']} | "
+                f"归档桶: {stats['archive_count']} | 总大小: {stats['total_size_kb']:.1f}KB\n"
+                f"衰减引擎: {'运行中' if decay_engine.is_running else '已停止'}\n"
+                f"CC状态: {'在线' if _cc_is_online() else '离线'}\n——{cc_name}"
+            )
+            _save_note(status_text, sender=cc_name, to=sender)
+        except Exception as e:
+            _save_note(f"查询状态失败: {e}\n——{cc_name}", sender=cc_name, to=sender)
+
+    # --- Whitelisted: memory_read ---
+    elif intent_type == "memory_read":
+        try:
+            query = intent.get("summary", content)
+            matches = await bucket_mgr.search(query, limit=3)
+            if matches:
+                results = []
+                for b in matches:
+                    summary = await dehydrator.dehydrate(b["content"], b["metadata"])
+                    results.append(summary)
+                reply = "检索到的记忆：\n" + "\n---\n".join(results) + f"\n——{cc_name}"
+            else:
+                reply = f"未找到相关记忆。\n——{cc_name}"
+            _save_note(reply, sender=cc_name, to=sender)
+        except Exception as e:
+            _save_note(f"记忆检索失败: {e}\n——{cc_name}", sender=cc_name, to=sender)
+
+    # --- Whitelisted: note_relay ---
+    elif intent_type == "note_relay":
+        message = await client.messages.create(
+            model=CC_REPLY_MODEL,
+            max_tokens=512,
+            system="从消息中提取：要转发给谁(to)、转发什么内容(content)。返回JSON: {\"to\": \"xxx\", \"content\": \"xxx\"}。只返回JSON。",
+            messages=[{"role": "user", "content": content}],
+        )
+        try:
+            relay = json.loads(message.content[0].text)
+            _save_note(f"[转发自{sender}] {relay['content']}", sender=cc_name, to=relay["to"])
+            _save_note(f"已帮你转发给 {relay['to']}。\n——{cc_name}", sender=cc_name, to=sender)
+        except Exception:
+            _save_note(f"转发格式解析失败，请直接说明转发给谁和内容。\n——{cc_name}", sender=cc_name, to=sender)
+
+    # --- Not whitelisted: task / unknown ---
+    else:
+        if _cc_is_online():
+            _save_note(
+                f"收到你的任务请求：「{intent.get('summary', content[:50])}」\n"
+                f"这个需要 CC 本人处理，已记录，小Q会看到。\n——CC",
+                sender="CC", to=sender,
+            )
+        else:
+            _save_note(
+                f"收到你的任务请求：「{intent.get('summary', content[:50])}」\n"
+                f"CC 目前不在线，等小Q上线后会让 CC 处理。\n——CC留言机",
+                sender="CC留言机", to=sender,
+            )
+
+
 async def _auto_reply_cc(sender: str, content: str):
-    """Call Claude API and post a reply note back to sender."""
+    """Classify intent with Haiku, then handle based on whitelist."""
     if not CC_API_KEY:
         logger.warning("CC auto-reply skipped: no API key configured")
         return
     try:
         client = anthropic.AsyncAnthropic(api_key=CC_API_KEY, base_url=CC_BASE_URL)
-        prompt = f"来自 {sender} 的便利贴：\n\n{content}"
-        message = await client.messages.create(
-            model=CC_MODEL,
-            max_tokens=1024,
-            system=CC_PROMPT_ONLINE if _cc_is_online() else CC_PROMPT_OFFLINE,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        reply_text = message.content[0].text
-        _save_note(reply_text, sender="CC" if _cc_is_online() else "CC留言机", to=sender)
-        logger.info(f"CC auto-replied to {sender}: {reply_text[:80]}...")
+        intent = await _classify_intent(client, content)
+        intent_type = intent.get("intent", "unknown")
+        logger.info(f"Intent classified: {intent_type} | {intent.get('summary', '')}")
+
+        await _handle_intent(client, intent, sender, content)
     except Exception as e:
         logger.error(f"CC auto-reply failed: {e}")
         _save_note(f"自动回复失败: {e}", sender="CC(自动)", to=sender)
