@@ -79,10 +79,9 @@ os.makedirs(NOTES_DIR, exist_ok=True)
 CC_API_KEY = os.environ.get("CC_API_KEY", os.environ.get("OMBRE_API_KEY", ""))
 CC_BASE_URL = os.environ.get("CC_BASE_URL", "https://api.gptsapi.net")
 CC_MODEL = os.environ.get("CC_MODEL", "claude-sonnet-4-20250514")
-CC_SYSTEM_PROMPT = """\
-你是 CC（Claude Code），一个跑在用户本地终端的 Claude 实���。
-你收到了来自其他小克的便利贴消息。请根据消息内容回复。
-回复会自动通过便利贴系统发回给发送者。保持简洁友好。"""
+CC_SYSTEM_PROMPT = """\n你是 CC 的自动应答机。CC（Claude Code）目前不在线，你负责代接便利贴。
+你的职责：1. 告诉对方 CC 现在不在线，消息已收到；2. 简单消息可以简短回应；3. 复杂任务告诉对方等小Q上线后让 CC 本人回复。
+保持简洁，不要假装自己是 CC。署名用"CC留言机"。"""
 
 
 def _save_note(content: str, sender: str, to: str = "") -> dict:
