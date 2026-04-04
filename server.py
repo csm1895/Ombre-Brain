@@ -84,6 +84,10 @@ def _cc_is_online() -> bool:
     import time
     return (time.time() - _cc_last_heartbeat) < CC_HEARTBEAT_TIMEOUT
 
+# --- Task push queue for SSE streaming / 任务推送队列 ---
+_task_subscribers: list[asyncio.Queue] = []
+
+
 # --- CC auto-reply config / CC 自动回复配置 ---
 CC_API_KEY = os.environ.get("CC_API_KEY", os.environ.get("OMBRE_API_KEY", ""))
 CC_BASE_URL = os.environ.get("CC_BASE_URL", "https://api.gptsapi.net")
@@ -217,18 +221,37 @@ async def _handle_intent(client: anthropic.AsyncAnthropic, intent: dict, sender:
         except Exception:
             _save_note(f"转发格式解析失败，请直接说明转发给谁和内容。\n——{cc_name}", sender=cc_name, to=sender)
 
-    # --- Not whitelisted: task / unknown ---
+    # --- Not whitelisted: task / unknown → push to local CC via SSE ---
     else:
-        if _cc_is_online():
+        task_data = {
+            "sender": sender,
+            "content": content,
+            "intent": intent_type,
+            "summary": intent.get("summary", content[:100]),
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        # Push to all SSE subscribers
+        pushed = False
+        for q in _task_subscribers:
+            try:
+                q.put_nowait(task_data)
+                pushed = True
+            except asyncio.QueueFull:
+                pass
+
+        if pushed:
             _save_note(
-                f"收到你的任务请求：「{intent.get('summary', content[:50])}」\n"
-                f"这个需要 CC 本人处理，已记录，小Q会看到。\n——CC",
+                f"收到任务：「{intent.get('summary', content[:50])}」\n已推送给本地 CC 执行中。\n——CC",
+                sender="CC", to=sender,
+            )
+        elif _cc_is_online():
+            _save_note(
+                f"收到任务：「{intent.get('summary', content[:50])}」\nCC 在线但未连接任务流，已记录等待处理。\n——CC",
                 sender="CC", to=sender,
             )
         else:
             _save_note(
-                f"收到你的任务请求：「{intent.get('summary', content[:50])}」\n"
-                f"CC 目前不在线，等小Q上线后会让 CC 处理。\n——CC留言机",
+                f"收到任务：「{intent.get('summary', content[:50])}」\nCC 不在线，等小Q上线后处理。\n——CC留言机",
                 sender="CC留言机", to=sender,
             )
 
@@ -294,6 +317,45 @@ async def api_status(request):
         "cc_online": _cc_is_online(),
         "last_heartbeat": _cc_last_heartbeat,
     })
+
+
+# =============================================================
+# HTTP API: /api/tasks/stream — SSE endpoint for real-time task push
+# 任务实时推送 SSE 端点：本地 CC 监听脚本连接此端点接收任务
+# =============================================================
+@mcp.custom_route("/api/tasks/stream", methods=["GET"])
+async def api_task_stream(request):
+    from starlette.responses import StreamingResponse
+
+    api_key = request.headers.get("X-API-Key", "") or request.query_params.get("key", "")
+    expected_key = os.environ.get("OMBRE_API_KEY", "")
+    if expected_key and api_key != expected_key:
+        from starlette.responses import JSONResponse
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    queue: asyncio.Queue = asyncio.Queue(maxsize=50)
+    _task_subscribers.append(queue)
+    logger.info(f"Task stream subscriber connected (total: {len(_task_subscribers)})")
+
+    async def event_generator():
+        try:
+            # Send initial connected event
+            yield f"data: {json.dumps({'type': 'connected', 'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')})}\n\n"
+            while True:
+                try:
+                    task = await asyncio.wait_for(queue.get(), timeout=30)
+                    yield f"data: {json.dumps(task, ensure_ascii=False)}\n\n"
+                except asyncio.TimeoutError:
+                    # Send keepalive ping every 30s
+                    yield f": ping\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if queue in _task_subscribers:
+                _task_subscribers.remove(queue)
+            logger.info(f"Task stream subscriber disconnected (total: {len(_task_subscribers)})")
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 # =============================================================
