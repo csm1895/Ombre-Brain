@@ -27,7 +27,7 @@ logger = logging.getLogger("cc-poller")
 OMBRE_BASE_URL = os.environ.get("OMBRE_BASE_URL", "").rstrip("/")
 OMBRE_API_KEY = os.environ.get("OMBRE_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://gptsapi.net")
+ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.gptsapi.net")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "180"))
 
 SYSTEM_PROMPT = """\
