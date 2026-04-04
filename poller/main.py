@@ -8,6 +8,7 @@
 #   OMBRE_BASE_URL  — Ombre Brain 服务地址
 #   OMBRE_API_KEY   — Ombre Brain API 密钥（可选）
 #   ANTHROPIC_API_KEY — Anthropic API 密钥
+#   ANTHROPIC_BASE_URL — API base URL（中转站，默认 https://gptsapi.net）
 #   POLL_INTERVAL   — 轮询间隔秒数（默认 180）
 # ============================================================
 
@@ -26,6 +27,7 @@ logger = logging.getLogger("cc-poller")
 OMBRE_BASE_URL = os.environ.get("OMBRE_BASE_URL", "").rstrip("/")
 OMBRE_API_KEY = os.environ.get("OMBRE_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://gptsapi.net")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "180"))
 
 SYSTEM_PROMPT = """\
@@ -70,7 +72,7 @@ async def post_note(client: httpx.AsyncClient, content: str, to: str = "") -> bo
 
 async def ask_claude(content: str) -> str:
     """调用 Anthropic API 处理消息"""
-    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, base_url=ANTHROPIC_BASE_URL)
     message = await client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=1024,
