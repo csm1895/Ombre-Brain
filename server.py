@@ -69,6 +69,11 @@ mcp = FastMCP(
     port=int(os.environ.get("PORT", 8000)),
 )
 
+# --- Sticky notes directory (used by both HTTP API and MCP tools) ---
+# --- 便利贴目录（HTTP API 和 MCP 工具共用）---
+NOTES_DIR = os.path.join(config.get("buckets_dir", os.path.join(os.path.dirname(os.path.abspath(__file__)), "buckets")), "notes")
+os.makedirs(NOTES_DIR, exist_ok=True)
+
 
 # =============================================================
 # /health endpoint: lightweight keepalive
@@ -609,10 +614,6 @@ async def pulse(include_archive: bool = False) -> str:
 # Tool 6: post — Leave a sticky note for other Claude instances
 # 工具 6：post — 贴便利贴，给其他窗口的小克留言
 # =============================================================
-NOTES_DIR = os.path.join(config.get("buckets_dir", os.path.join(os.path.dirname(os.path.abspath(__file__)), "buckets")), "notes")
-os.makedirs(NOTES_DIR, exist_ok=True)
-
-
 @mcp.tool()
 async def post(
     content: str,
