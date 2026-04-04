@@ -152,7 +152,24 @@ async def _classify_intent(client: anthropic.AsyncAnthropic, content: str) -> di
             system=CLASSIFIER_PROMPT,
             messages=[{"role": "user", "content": content}],
         )
-        return json.loads(message.content[0].text)
+        text = message.content[0].text.strip()
+        # Extract JSON from markdown code blocks if present
+        if "```" in text:
+            import re
+            m = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+            if m:
+                text = m.group(1)
+        # Try to find JSON object in text
+        if not text.startswith("{"):
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start >= 0 and end > start:
+                text = text[start:end]
+        result = json.loads(text)
+        # Normalize non-whitelisted intents to "task"
+        if result.get("intent") not in ("chat", "status", "memory_read", "note_relay", "task", "unknown"):
+            result["intent"] = "task"
+        return result
     except Exception as e:
         logger.warning(f"Intent classification failed: {e}")
         return {"intent": "chat", "summary": "分类失败，降级为闲聊"}
