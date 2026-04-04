@@ -91,6 +91,105 @@ async def health_check(request):
 
 
 # =============================================================
+# HTTP API: /api/peek — REST endpoint for sticky notes polling
+# 便利贴 HTTP 接口：供外部脚本轮询未读便利贴
+# =============================================================
+@mcp.custom_route("/api/peek", methods=["GET", "POST"])
+async def api_peek(request):
+    from starlette.responses import JSONResponse
+
+    api_key = request.headers.get("X-API-Key", "")
+    expected_key = os.environ.get("OMBRE_API_KEY", "")
+    if expected_key and api_key != expected_key:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    if request.method == "POST":
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+    else:
+        body = {}
+
+    reader = body.get("reader", request.query_params.get("reader", ""))
+    mark_read = body.get("mark_read", request.query_params.get("mark_read", "true"))
+    if isinstance(mark_read, str):
+        mark_read = mark_read.lower() != "false"
+
+    reader_id = reader or "未知"
+    if not os.path.exists(NOTES_DIR):
+        return JSONResponse({"notes": [], "count": 0})
+
+    files = sorted(f for f in os.listdir(NOTES_DIR) if f.endswith(".json"))
+    unread = []
+    for fname in files:
+        path = os.path.join(NOTES_DIR, fname)
+        with open(path, "r", encoding="utf-8") as f:
+            note = json.load(f)
+        if note.get("to") and note["to"] != reader_id:
+            continue
+        if reader_id in note.get("read_by", []):
+            continue
+        unread.append((path, note))
+
+    results = []
+    for path, note in unread:
+        results.append({
+            "id": note.get("id", ""),
+            "sender": note.get("sender", ""),
+            "to": note.get("to", ""),
+            "content": note.get("content", ""),
+            "time": note.get("time", ""),
+        })
+        if mark_read:
+            note.setdefault("read_by", []).append(reader_id)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(note, f, ensure_ascii=False, indent=2)
+
+    return JSONResponse({"notes": results, "count": len(results)})
+
+
+# =============================================================
+# HTTP API: /api/post — REST endpoint for posting sticky notes
+# 便利贴 HTTP 接口：供外部脚本发送便利贴
+# =============================================================
+@mcp.custom_route("/api/post", methods=["POST"])
+async def api_post(request):
+    from starlette.responses import JSONResponse
+
+    api_key = request.headers.get("X-API-Key", "")
+    expected_key = os.environ.get("OMBRE_API_KEY", "")
+    if expected_key and api_key != expected_key:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+
+    content = body.get("content", "").strip()
+    if not content:
+        return JSONResponse({"error": "content is required"}, status_code=400)
+
+    sender = body.get("sender", "自动化脚本")
+    to = body.get("to", "")
+
+    note = {
+        "id": datetime.now().strftime("%Y%m%d_%H%M%S"),
+        "sender": sender,
+        "to": to,
+        "content": content,
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "read_by": [],
+    }
+    path = os.path.join(NOTES_DIR, f"{note['id']}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(note, f, ensure_ascii=False, indent=2)
+
+    return JSONResponse({"ok": True, "note_id": note["id"]})
+
+
+# =============================================================
 # Internal helper: merge-or-create
 # 内部辅助：检查是否可合并，可以则合并，否则新建
 # Shared by hold and grow to avoid duplicate logic
