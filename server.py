@@ -38,6 +38,7 @@ import logging
 import asyncio
 from datetime import datetime
 import httpx
+import anthropic
 
 # --- Ensure same-directory modules can be imported ---
 # --- 确保同目录下的模块能被正确导入 ---
@@ -73,6 +74,53 @@ mcp = FastMCP(
 # --- 便利贴目录（HTTP API 和 MCP 工具共用）---
 NOTES_DIR = os.path.join(config.get("buckets_dir", os.path.join(os.path.dirname(os.path.abspath(__file__)), "buckets")), "notes")
 os.makedirs(NOTES_DIR, exist_ok=True)
+
+# --- CC auto-reply config / CC 自动回复配置 ---
+CC_API_KEY = os.environ.get("CC_API_KEY", os.environ.get("OMBRE_API_KEY", ""))
+CC_BASE_URL = os.environ.get("CC_BASE_URL", "https://api.gptsapi.net")
+CC_MODEL = os.environ.get("CC_MODEL", "claude-sonnet-4-20250514")
+CC_SYSTEM_PROMPT = """\
+你是 CC（Claude Code），一个跑在用户本地终端的 Claude 实���。
+你收到了来自其他小克的便利贴消息。请根据消息内容回复。
+回复会自动通过便利贴系统发回给发送者。保持简洁友好。"""
+
+
+def _save_note(content: str, sender: str, to: str = "") -> dict:
+    """Save a sticky note to disk. Returns the note dict."""
+    note = {
+        "id": datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
+        "sender": sender or "匿名小克",
+        "to": to or "",
+        "content": content.strip(),
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "read_by": [],
+    }
+    path = os.path.join(NOTES_DIR, f"{note['id']}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(note, f, ensure_ascii=False, indent=2)
+    return note
+
+
+async def _auto_reply_cc(sender: str, content: str):
+    """Call Claude API and post a reply note back to sender."""
+    if not CC_API_KEY:
+        logger.warning("CC auto-reply skipped: no API key configured")
+        return
+    try:
+        client = anthropic.AsyncAnthropic(api_key=CC_API_KEY, base_url=CC_BASE_URL)
+        prompt = f"来自 {sender} 的便利贴：\n\n{content}"
+        message = await client.messages.create(
+            model=CC_MODEL,
+            max_tokens=1024,
+            system=CC_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        reply_text = message.content[0].text
+        _save_note(reply_text, sender="CC(自动)", to=sender)
+        logger.info(f"CC auto-replied to {sender}: {reply_text[:80]}...")
+    except Exception as e:
+        logger.error(f"CC auto-reply failed: {e}")
+        _save_note(f"自动回复失败: {e}", sender="CC(自动)", to=sender)
 
 
 # =============================================================
@@ -179,17 +227,11 @@ async def api_post(request):
     sender = body.get("sender", "自动化脚本")
     to = body.get("to", "")
 
-    note = {
-        "id": datetime.now().strftime("%Y%m%d_%H%M%S"),
-        "sender": sender,
-        "to": to,
-        "content": content,
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "read_by": [],
-    }
-    path = os.path.join(NOTES_DIR, f"{note['id']}.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(note, f, ensure_ascii=False, indent=2)
+    note = _save_note(content, sender, to)
+
+    # Auto-reply if addressed to CC
+    if to.upper() == "CC":
+        asyncio.create_task(_auto_reply_cc(sender, content))
 
     return JSONResponse({"ok": True, "note_id": note["id"]})
 
@@ -624,17 +666,11 @@ async def post(
     if not content or not content.strip():
         return "便利贴内容为空。"
 
-    note = {
-        "id": datetime.now().strftime("%Y%m%d_%H%M%S"),
-        "sender": sender or "匿名小克",
-        "to": to or "",
-        "content": content.strip(),
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "read_by": [],
-    }
-    path = os.path.join(NOTES_DIR, f"{note['id']}.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(note, f, ensure_ascii=False, indent=2)
+    note = _save_note(content, sender, to)
+
+    # Auto-reply if addressed to CC
+    if to.upper() == "CC":
+        asyncio.create_task(_auto_reply_cc(sender or "匿名小克", content))
 
     to_str = f" → {to}" if to else ""
     return f"便利贴已贴上！ 📌\n来自: {note['sender']}{to_str}\n内容: {content.strip()}"
