@@ -850,3 +850,27 @@ class BucketManager:
                 states.append(bucket)
         
         return states
+
+    # ---------------------------------------------------------
+    # List all events
+    # 列出所有事件
+    # ---------------------------------------------------------
+    async def list_events(self) -> list[dict]:
+        """
+        List all event buckets.
+        列出所有事件桶。
+        """
+        if not os.path.exists(self.iron_rule_dir):
+            return []
+        
+        events = []
+        for root, _, files in os.walk(self.iron_rule_dir):
+            for filename in files:
+                if not filename.endswith(".md"):
+                    continue
+                file_path = os.path.join(root, filename)
+                bucket = self._load_bucket(file_path)
+                if bucket and bucket.get("metadata", {}).get("type") == "event":
+                    events.append(bucket)
+        
+        return events

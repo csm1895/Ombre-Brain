@@ -944,11 +944,16 @@ async def pulse(include_archive: bool = False) -> str:
     lines = []
     for b in buckets:
         meta = b.get("metadata", {})
-        if meta.get("type") == "iron_rule":
+        bucket_type = meta.get("type")
+        if bucket_type == "iron_rule":
             icon = "🔴"
-        elif meta.get("type") == "permanent":
+        elif bucket_type == "user_state":
+            icon = "📌"
+        elif bucket_type == "event":
+            icon = "📚"
+        elif bucket_type == "permanent":
             icon = "📦"
-        elif meta.get("type") == "archived":
+        elif bucket_type == "archived":
             icon = "🗄️"
         elif meta.get("resolved", False):
             icon = "✅"
@@ -1206,6 +1211,107 @@ async def end_user_state(state_name: str) -> str:
         return f"✅ 已结束用户状态 [{state_name.strip()}]"
     except Exception as e:
         return f"结束状态失败: {e}"
+
+# ============================================================
+# 工具 12: merge_into_event — 合并记忆为事件
+# ============================================================
+@mcp.tool()
+async def merge_into_event(
+    event_name: str,
+    bucket_ids: str,
+    summary: str = "",
+    key_moments: str = "",
+    event_time: str = "",
+) -> str:
+    """
+    将多条记忆合并为一个完整事件。不再是碎片，而是完整事件。
+    event_name: 事件名称（如"本地部署讨论"）
+    bucket_ids: 要合并的记忆桶ID，逗号分隔（如"abc123,def456,ghi789"）
+    summary: 可选，事件摘要
+    key_moments: 可选，关键时刻，逗号分隔
+    event_time: 可选，事件时间（如"2026-04-15 晚上"）
+    """
+    if not event_name or not event_name.strip():
+        return "事件名称不能为空。"
+    if not bucket_ids or not bucket_ids.strip():
+        return "至少需要一个记忆桶ID。"
+    
+    # 解析bucket_ids
+    ids = [bid.strip() for bid in bucket_ids.split(",") if bid.strip()]
+    if len(ids) < 1:
+        return "至少需要一个有效的记忆桶ID。"
+    
+    # 验证所有bucket_ids都存在
+    fragments = []
+    for bid in ids:
+        bucket = await bucket_mgr.get(bid)
+        if not bucket:
+            return f"记忆桶不存在: {bid}"
+        fragments.append(bucket)
+    
+    # 如果没有提供summary，自动生成
+    if not summary or not summary.strip():
+        # 从fragments中提取内容组合
+        contents = [f["content"][:100] for f in fragments]
+        summary = f"包含 {len(fragments)} 条记忆：" + "；".join(contents)
+    
+    # 解析key_moments
+    moments_list = []
+    if key_moments:
+        moments_list = [m.strip() for m in key_moments.split(",") if m.strip()]
+    
+    # 如果没有提供event_time，使用最早的创建时间
+    if not event_time or not event_time.strip():
+        earliest = min(
+            fragments,
+            key=lambda f: f.get("metadata", {}).get("created", "9999-99-99")
+        )
+        event_time = earliest.get("metadata", {}).get("created", "未知时间")
+    
+    # 创建事件桶
+    event_content = f"""# {event_name}
+
+**时间**: {event_time}
+
+**摘要**: {summary}
+
+**关键时刻**:
+{chr(10).join(f"- {m}" for m in moments_list) if moments_list else "无"}
+
+**包含的记忆**:
+{chr(10).join(f"- [{f['id']}] {f.get('metadata', {}).get('name', f['id'])}" for f in fragments)}
+"""
+    
+    try:
+        bucket_id = await bucket_mgr.create(
+            content=event_content,
+            tags=["事件整合"],
+            importance=10,
+            domain=["事件"],
+            valence=0.5,
+            arousal=0.5,
+            bucket_type="iron_rule",  # 存在iron_rule目录
+            name=f"事件_{event_name.strip()}",
+        )
+        
+        # 设置事件特有字段
+        bucket = await bucket_mgr.get(bucket_id)
+        if bucket:
+            file_path = bucket["path"]
+            import frontmatter
+            post = frontmatter.load(file_path)
+            post["type"] = "event"
+            post["event_name"] = event_name.strip()
+            post["event_time"] = event_time
+            post["summary"] = summary
+            post["key_moments"] = moments_list
+            post["fragments"] = ids  # 保存原始碎片ID
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(frontmatter.dumps(post))
+        
+        return f"✅ 已创建事件 [{event_name.strip()}]\n时间: {event_time}\n整合了 {len(fragments)} 条记忆\n摘要: {summary[:100]}"
+    except Exception as e:
+        return f"创建事件失败: {e}"
 
 # --- Entry point / 启动入口 ---
 if __name__ == "__main__":
