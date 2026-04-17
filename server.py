@@ -1004,6 +1004,29 @@ async def peek(
     return header + "\n---\n".join(results)
 
 
+
+# ============================================================
+# 工具 8: search — 轻量搜索
+# ============================================================
+@mcp.tool()
+async def search(query: str, max_results: int = 3) -> str:
+    """搜索网络信息，返回摘要结果"""
+    import httpx
+
+    url = "https://axtprkpbczlmbsakwjap.supabase.co/functions/v1/search"
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                url,
+                json={"query": query, "max_results": max_results}
+            )
+            response.raise_for_status()
+            data = response.json()
+            return str(data)
+    except Exception as e:
+        return f"搜索失败: {e}"
+
 # --- Entry point / 启动入口 ---
 if __name__ == "__main__":
     transport = config.get("transport", "stdio")
