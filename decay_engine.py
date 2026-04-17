@@ -123,8 +123,20 @@ class DecayEngine:
         # High-arousal unresolved buckets get urgency boost for priority surfacing
         # 高唤醒未解决桶额外加成，优先浮现
         urgency_boost = 1.5 if (arousal > 0.7 and not metadata.get("resolved", False)) else 1.0
+        
+        # --- Rumination boost: important unresolved memories get stronger over time ---
+        # --- 反刍加成：重要未解决记忆时间越久权重反而上涨 ---
+        rumination_boost = 1.0
+        if not metadata.get("resolved", False) and importance >= 7:
+            # 超过7天未解决的重要记忆，开始反刍
+            if days_since > 7:
+                # 每多7天，权重上涨20%，最多上涨2倍
+                rumination_days = min(days_since - 7, 49)  # 最多计算49天
+                rumination_boost = 1.0 + (rumination_days / 49) * 1.0  # 1.0 ~ 2.0
+                # 标记为反刍中
+                metadata["ruminating"] = True
 
-        return round(score * resolved_factor * urgency_boost, 4)
+        return round(score * resolved_factor * urgency_boost * rumination_boost, 4)
 
     # ---------------------------------------------------------
     # Execute one decay cycle

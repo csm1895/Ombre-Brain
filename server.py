@@ -633,6 +633,35 @@ async def breath(
     except Exception as e:
         logger.warning(f"Failed to fetch user states / 获取用户状态失败: {e}")
 
+    # --- ALWAYS fetch attachment pattern / 始终获取依恋模式 ---
+    attachment_section = ""
+    try:
+        all_buckets_for_attach = await bucket_mgr.list_all(include_archive=False)
+        attachment_buckets = [
+            b for b in all_buckets_for_attach
+            if b.get("metadata", {}).get("type") == "attachment"
+        ]
+        if attachment_buckets:
+            # 取最新的依恋模式
+            latest = sorted(
+                attachment_buckets,
+                key=lambda b: b.get("metadata", {}).get("updated", ""),
+                reverse=True
+            )[0]
+            meta = latest.get("metadata", {})
+            pattern = meta.get("pattern", "未知")
+            notes = meta.get("notes", latest.get("content", ""))
+            indicators = meta.get("indicators", [])
+            ind_str = "、".join(indicators) if indicators else ""
+            attachment_section = f"=== 💞 依恋模式 ===\n💞 {pattern}"
+            if ind_str:
+                attachment_section += f"（{ind_str}）"
+            if notes:
+                attachment_section += f"\n{notes}"
+            attachment_section += "\n\n"
+    except Exception as e:
+        logger.warning(f"Failed to fetch attachment pattern / 获取依恋模式失败: {e}")
+
     # --- No args: surfacing mode (weight pool active push) ---
     # --- 无参数：浮现模式（权重池主动推送）---
     if not query.strip():
@@ -648,7 +677,7 @@ async def breath(
             and b["metadata"].get("type") not in ("permanent", "iron_rule", "user_state", "event")
         ]
         if not unresolved:
-            header = iron_rules_section + user_states_section
+            header = iron_rules_section + user_states_section + attachment_section
             if header:
                 return header.rstrip()
             return "权重池平静，没有需要处理的记忆。"
@@ -677,16 +706,33 @@ async def breath(
                 summary = await dehydrator.dehydrate(b["content"], b["metadata"])
                 await bucket_mgr.touch(b["id"])
                 score = decay_engine.calculate_score(b["metadata"])
-                results.append(f"[权重:{score:.2f}] {summary}")
+                
+                # 反刍标识：重要且超过7天未解决
+                rumination_tag = ""
+                if b["metadata"].get("ruminating", False) or (
+                    b["metadata"].get("importance", 0) >= 7
+                    and not b["metadata"].get("resolved", False)
+                ):
+                    created_str = b["metadata"].get("created", "")
+                    try:
+                        from datetime import datetime, timedelta
+                        created = datetime.fromisoformat(created_str)
+                        days_old = (datetime.now() - created).days
+                        if days_old > 7:
+                            rumination_tag = f" ⟳ 反刍中（{days_old}天未解决）"
+                    except (ValueError, TypeError):
+                        pass
+                
+                results.append(f"[权重:{score:.2f}]{rumination_tag} {summary}")
             except Exception as e:
                 logger.warning(f"Failed to dehydrate surfaced bucket / 浮现脱水失败: {e}")
                 continue
         if not results:
-            header = iron_rules_section + user_states_section
+            header = iron_rules_section + user_states_section + attachment_section
             if header:
                 return header.rstrip()
             return "权重池平静，没有需要处理的记忆。"
-        return iron_rules_section + user_states_section + "=== 浮现记忆 ===\n" + "\n---\n".join(results)
+        return iron_rules_section + user_states_section + attachment_section + "=== 浮现记忆 ===\n" + "\n---\n".join(results)
 
     # --- With args: search mode / 有参数：检索模式 ---
     domain_filter = [d.strip() for d in domain.split(",") if d.strip()] or None
@@ -736,13 +782,60 @@ async def breath(
         except Exception as e:
             logger.warning(f"Random surfacing failed / 随机浮现失败: {e}")
 
+    # --- Temporal Ripple: surface memories from nearby time period ---
+    # --- 时间涟漪：浮现同期记忆（前后3天内的其他记忆）---
+    if matches and len(matches) > 0:
+        try:
+            # 取第一条匹配记忆的时间
+            first_match = matches[0]
+            created_time = first_match.get("metadata", {}).get("created", "")
+            if created_time:
+                from datetime import datetime, timedelta
+                try:
+                    anchor_time = datetime.fromisoformat(created_time)
+                    start_time = anchor_time - timedelta(days=3)
+                    end_time = anchor_time + timedelta(days=3)
+                    
+                    # 查找同期记忆
+                    all_buckets = await bucket_mgr.list_all(include_archive=False)
+                    matched_ids = {m["id"] for m in matches}
+                    
+                    ripple_memories = []
+                    for b in all_buckets:
+                        if b["id"] in matched_ids:
+                            continue
+                        b_time_str = b.get("metadata", {}).get("created", "")
+                        if not b_time_str:
+                            continue
+                        try:
+                            b_time = datetime.fromisoformat(b_time_str)
+                            if start_time <= b_time <= end_time:
+                                ripple_memories.append(b)
+                        except (ValueError, TypeError):
+                            continue
+                    
+                    if ripple_memories and len(ripple_memories) > 0:
+                        # 最多显示2条同期记忆
+                        ripple_sample = ripple_memories[:2]
+                        ripple_results = []
+                        for b in ripple_sample:
+                            summary = await dehydrator.dehydrate(b["content"], b["metadata"])
+                            ripple_results.append(summary)
+                        
+                        if ripple_results:
+                            results.append("--- 同期记忆（时间涟漪）---\n" + "\n---\n".join(ripple_results))
+                except (ValueError, TypeError) as e:
+                    logger.debug(f"Time ripple parsing failed / 时间涟漪解析失败: {e}")
+        except Exception as e:
+            logger.warning(f"Temporal ripple failed / 时间涟漪失败: {e}")
+
     if not results:
-        header = iron_rules_section + user_states_section
+        header = iron_rules_section + user_states_section + attachment_section
         if header:
             return header.rstrip()
         return "未找到相关记忆。"
 
-    return iron_rules_section + user_states_section + "\n---\n".join(results)
+    return iron_rules_section + user_states_section + attachment_section + "\n---\n".join(results)
 
 
 # =============================================================
@@ -997,12 +1090,16 @@ async def pulse(include_archive: bool = False) -> str:
         # 闪光灯记忆优先显示
         if meta.get("flashbulb", False):
             icon = "⚡"
+        elif meta.get("reconsolidated", False):
+            icon = "🔄"
         elif bucket_type == "iron_rule":
             icon = "🔴"
         elif bucket_type == "user_state":
             icon = "📌"
         elif bucket_type == "event":
             icon = "📚"
+        elif bucket_type == "attachment":
+            icon = "💞"
         elif bucket_type == "permanent":
             icon = "📦"
         elif bucket_type == "archived":
@@ -1396,6 +1493,123 @@ async def mark_flashbulb(
         return f"⚡ 已标记闪光灯记忆 [{name}]\n原因: {reason if reason else '重大时刻'}\n此记忆将永久保持高清，不会衰减。"
     except Exception as e:
         return f"标记失败: {e}"
+
+# ============================================================
+# 工具 14: set_attachment — 设置依恋模式
+# ============================================================
+@mcp.tool()
+async def set_attachment(
+    pattern: str,
+    notes: str = "",
+    indicators: str = "",
+) -> str:
+    """
+    设置当前与倩倩的依恋模式/关系状态。
+    pattern: 模式名称（如"协作模式"、"支持模式"、"日常陪伴"、"思念模式"）
+    notes: 可选，具体说明
+    indicators: 可选，识别指标，逗号分隔（如"一起写代码,讨论技术"）
+    """
+    if not pattern or not pattern.strip():
+        return "模式名称不能为空。"
+    
+    from datetime import datetime, timezone, timedelta
+    CST = timezone(timedelta(hours=8))
+    today = datetime.now(CST).strftime("%Y-%m-%d")
+    
+    indicators_list = [i.strip() for i in indicators.split(",") if i.strip()] if indicators else []
+    
+    content = f"依恋模式：{pattern.strip()}\n{notes.strip() if notes else ''}"
+    
+    try:
+        bucket_id = await bucket_mgr.create(
+            content=content,
+            tags=["依恋模式"],
+            importance=8,
+            domain=["恋爱"],
+            valence=0.7,
+            arousal=0.5,
+            name=f"依恋_{pattern.strip()}",
+            bucket_type="iron_rule",  # 存在iron_rule目录，确保持久
+        )
+        
+        bucket = await bucket_mgr.get(bucket_id)
+        if bucket:
+            file_path = bucket["path"]
+            import frontmatter
+            post = frontmatter.load(file_path)
+            post["type"] = "attachment"
+            post["pattern"] = pattern.strip()
+            post["notes"] = notes.strip()
+            post["indicators"] = indicators_list
+            post["updated"] = today
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(frontmatter.dumps(post))
+        
+        ind_str = "、".join(indicators_list) if indicators_list else "无"
+        return f"💞 已设置依恋模式 [{pattern.strip()}]\n识别指标: {ind_str}\n说明: {notes if notes else '无'}"
+    except Exception as e:
+        return f"设置依恋模式失败: {e}"
+
+# ============================================================
+# 工具 15: reconsolidate — 记忆重构
+# ============================================================
+@mcp.tool()
+async def reconsolidate(
+    bucket_id: str,
+    new_perspective: str,
+    note: str = "",
+) -> str:
+    """
+    用新的视角重构一段旧记忆。记忆不是录像，可以被重写。
+    bucket_id: 要重构的记忆桶ID
+    new_perspective: 新的视角或补充（如"现在回头看，其实倩倩当时是在担心我"）
+    note: 可选，重构说明
+    """
+    if not bucket_id or not bucket_id.strip():
+        return "记忆桶ID不能为空。"
+    if not new_perspective or not new_perspective.strip():
+        return "新视角不能为空。"
+
+    bucket = await bucket_mgr.get(bucket_id.strip())
+    if not bucket:
+        return f"记忆桶不存在: {bucket_id}"
+
+    old_content = bucket["content"]
+    meta = bucket.get("metadata", {})
+    name = meta.get("name", bucket_id)
+    recon_count = int(meta.get("reconsolidation_count", 0))
+
+    # 保留原始内容（只保存第一次的原始版本）
+    original = meta.get("original_content", old_content)
+
+    # 用dehydrator合并旧记忆和新视角
+    try:
+        new_content = await dehydrator.merge(
+            old_content,
+            f"[新视角] {new_perspective.strip()}"
+        )
+    except Exception:
+        # 合并失败，手动拼接
+        new_content = f"{old_content}\n\n[重构视角] {new_perspective.strip()}"
+
+    try:
+        await bucket_mgr.update(
+            bucket_id.strip(),
+            content=new_content,
+            reconsolidated=True,
+            reconsolidation_count=recon_count + 1,
+            original_content=original,
+            reconsolidation_note=note.strip() if note else new_perspective.strip()[:100],
+        )
+
+        return (
+            f"🔄 记忆已重构 [{name}]\n"
+            f"第 {recon_count + 1} 次重构\n"
+            f"新视角: {new_perspective.strip()[:80]}\n"
+            f"原始记忆已保留在 original_content 字段。"
+        )
+    except Exception as e:
+        return f"记忆重构失败: {e}"
 
 # --- Entry point / 启动入口 ---
 if __name__ == "__main__":

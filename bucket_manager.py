@@ -250,6 +250,14 @@ class BucketManager:
             post["flashbulb"] = bool(kwargs["flashbulb"])
         if "flashbulb_reason" in kwargs:
             post["flashbulb_reason"] = kwargs["flashbulb_reason"]
+        if "reconsolidated" in kwargs:
+            post["reconsolidated"] = bool(kwargs["reconsolidated"])
+        if "reconsolidation_count" in kwargs:
+            post["reconsolidation_count"] = int(kwargs["reconsolidation_count"])
+        if "original_content" in kwargs:
+            post["original_content"] = kwargs["original_content"]
+        if "reconsolidation_note" in kwargs:
+            post["reconsolidation_note"] = kwargs["reconsolidation_note"]
 
         # --- Auto-refresh activation time / 自动刷新激活时间 ---
         post["last_active"] = now_iso()
