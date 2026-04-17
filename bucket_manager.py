@@ -234,6 +234,16 @@ class BucketManager:
             post["resolved"] = bool(kwargs["resolved"])
         if "priority" in kwargs:
             post["priority"] = max(1, min(10, int(kwargs["priority"])))
+        if "active" in kwargs:
+            post["active"] = bool(kwargs["active"])
+        if "start_date" in kwargs:
+            post["start_date"] = kwargs["start_date"]
+        if "end_date" in kwargs:
+            post["end_date"] = kwargs["end_date"]
+        if "state_name" in kwargs:
+            post["state_name"] = kwargs["state_name"]
+        if "state_desc" in kwargs:
+            post["state_desc"] = kwargs["state_desc"]
 
         # --- Auto-refresh activation time / 自动刷新激活时间 ---
         post["last_active"] = now_iso()
@@ -792,3 +802,51 @@ class BucketManager:
         # Sort by priority (highest first)
         rules.sort(key=lambda x: x.get("metadata", {}).get("priority", 0), reverse=True)
         return rules
+
+    # ---------------------------------------------------------
+    # List all active user states
+    # 列出所有激活的用户状态
+    # ---------------------------------------------------------
+    async def list_active_states(self) -> list[dict]:
+        """
+        List all active user state buckets (active=True and not expired).
+        列出所有激活的用户状态桶（active=True 且未过期）。
+        """
+        if not os.path.exists(self.iron_rule_dir):
+            return []
+        
+        states = []
+        today = datetime.now().date()
+        
+        for root, _, files in os.walk(self.iron_rule_dir):
+            for filename in files:
+                if not filename.endswith(".md"):
+                    continue
+                file_path = os.path.join(root, filename)
+                bucket = self._load_bucket(file_path)
+                if not bucket:
+                    continue
+                
+                meta = bucket.get("metadata", {})
+                if meta.get("type") != "user_state":
+                    continue
+                
+                # Check if active
+                if not meta.get("active", False):
+                    continue
+                
+                # Check if expired
+                end_date_str = meta.get("end_date", "")
+                if end_date_str:
+                    try:
+                        end_date = datetime.fromisoformat(end_date_str).date()
+                        if today > end_date:
+                            # Auto-deactivate expired state
+                            await self.update(bucket["id"], active=False)
+                            continue
+                    except (ValueError, TypeError):
+                        pass
+                
+                states.append(bucket)
+        
+        return states

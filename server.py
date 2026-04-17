@@ -601,6 +601,30 @@ async def breath(
     except Exception as e:
         logger.warning(f"Failed to fetch iron rules / 获取铁则失败: {e}")
 
+    # --- ALWAYS fetch active user states / 始终获取激活的用户状态 ---
+    user_states_section = ""
+    try:
+        active_states = await bucket_mgr.list_active_states()
+        if active_states:
+            state_lines = []
+            for state in active_states:
+                meta = state.get("metadata", {})
+                state_name = meta.get("state_name", "未知状态")
+                state_desc = meta.get("state_desc", state.get("content", ""))
+                start_date = meta.get("start_date", "")
+                end_date = meta.get("end_date", "")
+                
+                date_info = f"（自 {start_date}"
+                if end_date:
+                    date_info += f" 至 {end_date}）"
+                else:
+                    date_info += " 起）"
+                
+                state_lines.append(f"📌 {state_name}: {state_desc} {date_info}")
+            user_states_section = "=== 📌 当前状态 ===\n" + "\n".join(state_lines) + "\n\n"
+    except Exception as e:
+        logger.warning(f"Failed to fetch user states / 获取用户状态失败: {e}")
+
     # --- No args: surfacing mode (weight pool active push) ---
     # --- 无参数：浮现模式（权重池主动推送）---
     if not query.strip():
@@ -635,10 +659,11 @@ async def breath(
                 logger.warning(f"Failed to dehydrate surfaced bucket / 浮现脱水失败: {e}")
                 continue
         if not results:
-            if iron_rules_section:
-                return iron_rules_section.rstrip()
+            header = iron_rules_section + user_states_section
+            if header:
+                return header.rstrip()
             return "权重池平静，没有需要处理的记忆。"
-        return iron_rules_section + "=== 浮现记忆 ===\n" + "\n---\n".join(results)
+        return iron_rules_section + user_states_section + "=== 浮现记忆 ===\n" + "\n---\n".join(results)
 
     # --- With args: search mode / 有参数：检索模式 ---
     domain_filter = [d.strip() for d in domain.split(",") if d.strip()] or None
@@ -689,11 +714,12 @@ async def breath(
             logger.warning(f"Random surfacing failed / 随机浮现失败: {e}")
 
     if not results:
-        if iron_rules_section:
-            return iron_rules_section.rstrip()
+        header = iron_rules_section + user_states_section
+        if header:
+            return header.rstrip()
         return "未找到相关记忆。"
 
-    return iron_rules_section + "\n---\n".join(results)
+    return iron_rules_section + user_states_section + "\n---\n".join(results)
 
 
 # =============================================================
@@ -1087,6 +1113,99 @@ async def set_iron_rule(
         return f"✅ 已设置红线铁则 [{rule_name}] (优先级:{priority})\n内容: {rule_text.strip()}"
     except Exception as e:
         return f"设置铁则失败: {e}"
+
+# ============================================================
+# 工具 10: set_user_state — 设置用户状态
+# ============================================================
+@mcp.tool()
+async def set_user_state(
+    state_name: str,
+    state_desc: str,
+    end_date: str = "",
+) -> str:
+    """
+    设置用户当前状态。状态会在所有对话中自动显示，直到结束或过期。
+    state_name: 状态名称（如"备考中"、"装修期间"）
+    state_desc: 状态描述（如"准备4月底考试，压力大"）
+    end_date: 可选，结束日期，格式 YYYY-MM-DD。留空则持续到手动结束。
+    """
+    if not state_name or not state_name.strip():
+        return "状态名称不能为空。"
+    if not state_desc or not state_desc.strip():
+        return "状态描述不能为空。"
+    
+    # 验证 end_date 格式
+    if end_date:
+        try:
+            datetime.fromisoformat(end_date)
+        except ValueError:
+            return f"日期格式错误，应为 YYYY-MM-DD，收到: {end_date}"
+    
+    start_date = datetime.now(CST).strftime("%Y-%m-%d")
+    
+    try:
+        bucket_id = await bucket_mgr.create(
+            content=state_desc.strip(),
+            tags=["用户状态"],
+            importance=10,
+            domain=["状态"],
+            valence=0.5,
+            arousal=0.5,
+            bucket_type="iron_rule",  # 存在 iron_rule 目录下
+            name=f"状态_{state_name.strip()}",
+        )
+        
+        # 设置状态特有字段
+        # 先获取bucket，手动修改type
+        bucket = await bucket_mgr.get(bucket_id)
+        if bucket:
+            file_path = bucket["path"]
+            import frontmatter
+            post = frontmatter.load(file_path)
+            post["type"] = "user_state"
+            post["state_name"] = state_name.strip()
+            post["state_desc"] = state_desc.strip()
+            post["start_date"] = start_date
+            post["end_date"] = end_date
+            post["active"] = True
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(frontmatter.dumps(post))
+        
+        end_info = f"，截止 {end_date}" if end_date else "，持续中"
+        return f"✅ 已设置用户状态 [{state_name.strip()}]\n描述: {state_desc.strip()}\n开始: {start_date}{end_info}"
+    except Exception as e:
+        return f"设置状态失败: {e}"
+
+# ============================================================
+# 工具 11: end_user_state — 结束用户状态
+# ============================================================
+@mcp.tool()
+async def end_user_state(state_name: str) -> str:
+    """
+    结束指定的用户状态。
+    state_name: 要结束的状态名称
+    """
+    if not state_name or not state_name.strip():
+        return "状态名称不能为空。"
+    
+    try:
+        # 查找该状态
+        active_states = await bucket_mgr.list_active_states()
+        target = None
+        for state in active_states:
+            if state.get("metadata", {}).get("state_name") == state_name.strip():
+                target = state
+                break
+        
+        if not target:
+            return f"未找到激活状态: {state_name.strip()}"
+        
+        # 设置为非激活
+        await bucket_mgr.update(target["id"], active=False)
+        
+        return f"✅ 已结束用户状态 [{state_name.strip()}]"
+    except Exception as e:
+        return f"结束状态失败: {e}"
 
 # --- Entry point / 启动入口 ---
 if __name__ == "__main__":
