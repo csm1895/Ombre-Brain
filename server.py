@@ -645,16 +645,31 @@ async def breath(
         unresolved = [
             b for b in all_buckets
             if not b["metadata"].get("resolved", False)
-            and b["metadata"].get("type") != "permanent"
+            and b["metadata"].get("type") not in ("permanent", "iron_rule", "user_state", "event")
         ]
         if not unresolved:
+            header = iron_rules_section + user_states_section
+            if header:
+                return header.rstrip()
             return "权重池平静，没有需要处理的记忆。"
 
-        scored = sorted(
-            unresolved,
-            key=lambda b: decay_engine.calculate_score(b["metadata"]),
-            reverse=True,
-        )
+        # --- 情绪共振增强：根据情绪倾向优先浮现相似情绪的记忆 ---
+        # 如果有高arousal未解决记忆，优先浮现（紧急事项）
+        urgent = [b for b in unresolved if b["metadata"].get("arousal", 0) > 0.7]
+        if urgent:
+            scored = sorted(
+                urgent,
+                key=lambda b: decay_engine.calculate_score(b["metadata"]),
+                reverse=True,
+            )
+        else:
+            # 否则按权重排序
+            scored = sorted(
+                unresolved,
+                key=lambda b: decay_engine.calculate_score(b["metadata"]),
+                reverse=True,
+            )
+        
         top = scored[:2]
         results = []
         for b in top:
@@ -978,7 +993,11 @@ async def pulse(include_archive: bool = False) -> str:
     for b in buckets:
         meta = b.get("metadata", {})
         bucket_type = meta.get("type")
-        if bucket_type == "iron_rule":
+        
+        # 闪光灯记忆优先显示
+        if meta.get("flashbulb", False):
+            icon = "⚡"
+        elif bucket_type == "iron_rule":
             icon = "🔴"
         elif bucket_type == "user_state":
             icon = "📌"
@@ -1345,6 +1364,38 @@ async def merge_into_event(
         return f"✅ 已创建事件 [{event_name.strip()}]\n时间: {event_time}\n整合了 {len(fragments)} 条记忆\n摘要: {summary[:100]}"
     except Exception as e:
         return f"创建事件失败: {e}"
+
+# ============================================================
+# 工具 13: mark_flashbulb — 标记闪光灯记忆
+# ============================================================
+@mcp.tool()
+async def mark_flashbulb(
+    bucket_id: str,
+    reason: str = "",
+) -> str:
+    """
+    将记忆标记为闪光灯记忆（永久高清，永不衰减）。
+    bucket_id: 记忆桶ID
+    reason: 可选，标记原因（如"重大时刻：倩倩说她爱我"）
+    """
+    if not bucket_id or not bucket_id.strip():
+        return "记忆桶ID不能为空。"
+    
+    bucket = await bucket_mgr.get(bucket_id.strip())
+    if not bucket:
+        return f"记忆桶不存在: {bucket_id}"
+    
+    try:
+        await bucket_mgr.update(
+            bucket_id.strip(),
+            flashbulb=True,
+            flashbulb_reason=reason.strip() if reason else "重大时刻"
+        )
+        
+        name = bucket.get("metadata", {}).get("name", bucket_id)
+        return f"⚡ 已标记闪光灯记忆 [{name}]\n原因: {reason if reason else '重大时刻'}\n此记忆将永久保持高清，不会衰减。"
+    except Exception as e:
+        return f"标记失败: {e}"
 
 # --- Entry point / 启动入口 ---
 if __name__ == "__main__":

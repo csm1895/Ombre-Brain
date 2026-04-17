@@ -79,9 +79,12 @@ class DecayEngine:
         if not isinstance(metadata, dict):
             return 0.0
 
-        # --- Permanent buckets and iron rules never decay / 固化桶和铁则永不衰减 ---
+        # --- Permanent buckets, iron rules, and flashbulb memories never decay ---
+        # --- 固化桶、铁则、闪光灯记忆永不衰减 ---
         bucket_type = metadata.get("type")
-        if bucket_type == "permanent" or bucket_type == "iron_rule":
+        if bucket_type == "permanent":
+            return 999.0
+        if metadata.get("flashbulb", False):
             return 999.0
 
         importance = max(1, min(10, int(metadata.get("importance", 5))))
@@ -150,9 +153,10 @@ class DecayEngine:
         for bucket in buckets:
             meta = bucket.get("metadata", {})
 
-            # Skip permanent buckets and iron rules / 跳过固化桶和铁则
-            bucket_type = meta.get("type")
-            if bucket_type == "permanent" or bucket_type == "iron_rule":
+            # Skip permanent buckets and flashbulb memories / 跳过固化桶和闪光灯记忆
+            if meta.get("type") == "permanent":
+                continue
+            if meta.get("flashbulb", False):
                 continue
 
             checked += 1

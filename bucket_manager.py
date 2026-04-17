@@ -246,6 +246,10 @@ class BucketManager:
             post["state_desc"] = kwargs["state_desc"]
         if "sensory" in kwargs:
             post["sensory"] = kwargs["sensory"]
+        if "flashbulb" in kwargs:
+            post["flashbulb"] = bool(kwargs["flashbulb"])
+        if "flashbulb_reason" in kwargs:
+            post["flashbulb_reason"] = kwargs["flashbulb_reason"]
 
         # --- Auto-refresh activation time / 自动刷新激活时间 ---
         post["last_active"] = now_iso()
