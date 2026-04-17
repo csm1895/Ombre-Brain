@@ -391,6 +391,8 @@ class Dehydrator:
         将脱水结果格式化为可注入上下文的文本。
         """
         header = ""
+        sensory_line = ""
+        
         if metadata and isinstance(metadata, dict):
             name = metadata.get("name", "未命名")
             tags = ", ".join(metadata.get("tags", []))
@@ -407,7 +409,23 @@ class Dehydrator:
                 header += f" [标签:{tags}]"
             header += f" [情感:V{valence:.1f}/A{arousal:.1f}]"
             header += "\n"
-        return f"{header}{content}"
+            
+            # 添加感官锚点显示
+            sensory = metadata.get("sensory", {})
+            if sensory and isinstance(sensory, dict):
+                sensory_parts = []
+                if sensory.get("weather"):
+                    sensory_parts.append(f"天气:{sensory['weather']}")
+                if sensory.get("time_of_day"):
+                    sensory_parts.append(f"时段:{sensory['time_of_day']}")
+                if sensory.get("location"):
+                    sensory_parts.append(f"地点:{sensory['location']}")
+                if sensory.get("atmosphere"):
+                    sensory_parts.append(f"氛围:{sensory['atmosphere']}")
+                if sensory_parts:
+                    sensory_line = "🌟 " + " | ".join(sensory_parts) + "\n"
+        
+        return f"{header}{sensory_line}{content}"
 
     # ---------------------------------------------------------
     # Auto-tagging: analyze content for domain + emotion + tags

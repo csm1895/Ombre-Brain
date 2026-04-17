@@ -524,6 +524,7 @@ async def _merge_or_create(
     valence: float,
     arousal: float,
     name: str = "",
+    sensory: dict = None,
 ) -> tuple[str, bool]:
     """
     Check if a similar bucket exists for merging; merge if so, create if not.
@@ -541,15 +542,17 @@ async def _merge_or_create(
         bucket = existing[0]
         try:
             merged = await dehydrator.merge(bucket["content"], content)
-            await bucket_mgr.update(
-                bucket["id"],
-                content=merged,
-                tags=list(set(bucket["metadata"].get("tags", []) + tags)),
-                importance=max(bucket["metadata"].get("importance", 5), importance),
-                domain=list(set(bucket["metadata"].get("domain", []) + domain)),
-                valence=valence,
-                arousal=arousal,
-            )
+            update_kwargs = {
+                "content": merged,
+                "tags": list(set(bucket["metadata"].get("tags", []) + tags)),
+                "importance": max(bucket["metadata"].get("importance", 5), importance),
+                "domain": list(set(bucket["metadata"].get("domain", []) + domain)),
+                "valence": valence,
+                "arousal": arousal,
+            }
+            if sensory:
+                update_kwargs["sensory"] = sensory
+            await bucket_mgr.update(bucket["id"], **update_kwargs)
             return bucket["metadata"].get("name", bucket["id"]), True
         except Exception as e:
             logger.warning(f"Merge failed, creating new / 合并失败，新建: {e}")
@@ -563,6 +566,11 @@ async def _merge_or_create(
         arousal=arousal,
         name=name or None,
     )
+    
+    # 如果有sensory，创建后立即更新
+    if sensory:
+        await bucket_mgr.update(bucket_id, sensory=sensory)
+    
     return bucket_id, False
 
 
@@ -731,8 +739,21 @@ async def hold(
     content: str,
     tags: str = "",
     importance: int = 5,
+    weather: str = "",
+    time_of_day: str = "",
+    location: str = "",
+    atmosphere: str = "",
 ) -> str:
-    """存储单条记忆。自动打标+合并相似桶。tags 逗号分隔，importance 1-10。"""
+    """
+    存储单条记忆。自动打标+合并相似桶。
+    content: 记忆内容
+    tags: 可选，逗号分隔的标签
+    importance: 1-10，重要程度
+    weather: 可选，天气（如"晴天"、"下雨"）
+    time_of_day: 可选，时段（如"早上"、"晚上"）
+    location: 可选，地点（如"家里客厅"、"办公室"）
+    atmosphere: 可选，氛围（如"温暖安静"、"紧张"）
+    """
     await decay_engine.ensure_started()
 
     # --- Input validation / 输入校验 ---
@@ -741,6 +762,17 @@ async def hold(
 
     importance = max(1, min(10, importance))
     extra_tags = [t.strip() for t in tags.split(",") if t.strip()]
+    
+    # --- 构建感官锚点 / Build sensory anchors ---
+    sensory = {}
+    if weather:
+        sensory["weather"] = weather.strip()
+    if time_of_day:
+        sensory["time_of_day"] = time_of_day.strip()
+    if location:
+        sensory["location"] = location.strip()
+    if atmosphere:
+        sensory["atmosphere"] = atmosphere.strip()
 
     # --- Step 1: auto-tagging / 自动打标 ---
     try:
@@ -769,6 +801,7 @@ async def hold(
         valence=valence,
         arousal=arousal,
         name=suggested_name,
+        sensory=sensory if sensory else None,
     )
 
     if is_merged:

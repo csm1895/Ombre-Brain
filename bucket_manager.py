@@ -244,6 +244,8 @@ class BucketManager:
             post["state_name"] = kwargs["state_name"]
         if "state_desc" in kwargs:
             post["state_desc"] = kwargs["state_desc"]
+        if "sensory" in kwargs:
+            post["sensory"] = kwargs["sensory"]
 
         # --- Auto-refresh activation time / 自动刷新激活时间 ---
         post["last_active"] = now_iso()
