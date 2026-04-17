@@ -586,6 +586,21 @@ async def breath(
     """检索记忆或浮现未解决记忆。query 为空时自动推送权重最高的未解决桶；有 query 时按关键词+情感检索。domain 逗号分隔，valence/arousal 传 0~1 启用情感共鸣，-1 忽略。"""
     await decay_engine.ensure_started()
 
+    # --- ALWAYS fetch iron rules first / 始终先获取红线铁则 ---
+    iron_rules_section = ""
+    try:
+        iron_rules = await bucket_mgr.list_iron_rules()
+        if iron_rules:
+            rule_lines = []
+            for rule in iron_rules:
+                priority = rule.get("metadata", {}).get("priority", 10)
+                name = rule.get("metadata", {}).get("name", "铁则")
+                content = rule.get("content", "").strip()
+                rule_lines.append(f"🔴 [{name}] (优先级:{priority})\n   {content}")
+            iron_rules_section = "=== 🔴 红线铁则（永久生效）===\n" + "\n".join(rule_lines) + "\n\n"
+    except Exception as e:
+        logger.warning(f"Failed to fetch iron rules / 获取铁则失败: {e}")
+
     # --- No args: surfacing mode (weight pool active push) ---
     # --- 无参数：浮现模式（权重池主动推送）---
     if not query.strip():
@@ -620,8 +635,10 @@ async def breath(
                 logger.warning(f"Failed to dehydrate surfaced bucket / 浮现脱水失败: {e}")
                 continue
         if not results:
+            if iron_rules_section:
+                return iron_rules_section.rstrip()
             return "权重池平静，没有需要处理的记忆。"
-        return "=== 浮现记忆 ===\n" + "\n---\n".join(results)
+        return iron_rules_section + "=== 浮现记忆 ===\n" + "\n---\n".join(results)
 
     # --- With args: search mode / 有参数：检索模式 ---
     domain_filter = [d.strip() for d in domain.split(",") if d.strip()] or None
@@ -672,9 +689,11 @@ async def breath(
             logger.warning(f"Random surfacing failed / 随机浮现失败: {e}")
 
     if not results:
+        if iron_rules_section:
+            return iron_rules_section.rstrip()
         return "未找到相关记忆。"
 
-    return "\n---\n".join(results)
+    return iron_rules_section + "\n---\n".join(results)
 
 
 # =============================================================
@@ -879,6 +898,7 @@ async def pulse(include_archive: bool = False) -> str:
 
     status = (
         f"=== Ombre Brain 记忆系统 ===\n"
+        f"🔴 红线铁则: {stats['iron_rule_count']} 条\n"
         f"固化记忆桶: {stats['permanent_count']} 个\n"
         f"动态记忆桶: {stats['dynamic_count']} 个\n"
         f"归档记忆桶: {stats['archive_count']} 个\n"
@@ -898,7 +918,9 @@ async def pulse(include_archive: bool = False) -> str:
     lines = []
     for b in buckets:
         meta = b.get("metadata", {})
-        if meta.get("type") == "permanent":
+        if meta.get("type") == "iron_rule":
+            icon = "🔴"
+        elif meta.get("type") == "permanent":
             icon = "📦"
         elif meta.get("type") == "archived":
             icon = "🗄️"
@@ -1026,6 +1048,45 @@ async def search(query: str, max_results: int = 3) -> str:
             return str(data)
     except Exception as e:
         return f"搜索失败: {e}"
+
+# ============================================================
+# 工具 9: set_iron_rule — 设置红线铁则
+# ============================================================
+@mcp.tool()
+async def set_iron_rule(
+    rule_text: str,
+    priority: int = 10,
+    name: str = "",
+) -> str:
+    """
+    设置红线铁则。铁则是最高优先级常驻规则，永不衰减、永不归档。
+    priority: 1-10，默认10最高。
+    name: 可选，铁则的简短名称。
+    """
+    if not rule_text or not rule_text.strip():
+        return "铁则内容不能为空。"
+    
+    priority = max(1, min(10, priority))
+    rule_name = name.strip() if name else f"铁则_{priority}"
+    
+    try:
+        bucket_id = await bucket_mgr.create(
+            content=rule_text.strip(),
+            tags=["铁则", "核心规则"],
+            importance=10,
+            domain=["核心"],
+            valence=0.5,
+            arousal=0.5,
+            bucket_type="iron_rule",
+            name=rule_name,
+        )
+        
+        # 铁则创建后需要额外设置priority字段
+        await bucket_mgr.update(bucket_id, priority=priority)
+        
+        return f"✅ 已设置红线铁则 [{rule_name}] (优先级:{priority})\n内容: {rule_text.strip()}"
+    except Exception as e:
+        return f"设置铁则失败: {e}"
 
 # --- Entry point / 启动入口 ---
 if __name__ == "__main__":

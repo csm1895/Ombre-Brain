@@ -60,6 +60,7 @@ class BucketManager:
         self.permanent_dir = os.path.join(self.base_dir, "permanent")
         self.dynamic_dir = os.path.join(self.base_dir, "dynamic")
         self.archive_dir = os.path.join(self.base_dir, "archive")
+        self.iron_rule_dir = os.path.join(self.base_dir, "iron_rules")  # 新增：红线铁则目录
         self.fuzzy_threshold = config.get("matching", {}).get("fuzzy_threshold", 50)
         self.max_results = config.get("matching", {}).get("max_results", 5)
 
@@ -138,7 +139,13 @@ class BucketManager:
 
         # --- Choose directory by type + primary domain ---
         # --- 按类型 + 主题域选择存储目录 ---
-        type_dir = self.permanent_dir if bucket_type == "permanent" else self.dynamic_dir
+        if bucket_type == "permanent":
+            type_dir = self.permanent_dir
+        elif bucket_type == "iron_rule":
+            type_dir = self.iron_rule_dir
+        else:
+            type_dir = self.dynamic_dir
+        
         primary_domain = sanitize_name(domain[0]) if domain else "未分类"
         target_dir = os.path.join(type_dir, primary_domain)
         os.makedirs(target_dir, exist_ok=True)
@@ -225,6 +232,8 @@ class BucketManager:
             post["name"] = sanitize_name(kwargs["name"])
         if "resolved" in kwargs:
             post["resolved"] = bool(kwargs["resolved"])
+        if "priority" in kwargs:
+            post["priority"] = max(1, min(10, int(kwargs["priority"])))
 
         # --- Auto-refresh activation time / 自动刷新激活时间 ---
         post["last_active"] = now_iso()
@@ -599,7 +608,7 @@ class BucketManager:
     # List all buckets
     # 列出所有桶
     # ---------------------------------------------------------
-    async def list_all(self, include_archive: bool = False) -> list[dict]:
+    async def list_all(self, include_archive: bool = False, include_iron_rules: bool = True) -> list[dict]:
         """
         Recursively walk directories (including domain subdirs), list all buckets.
         递归遍历目录（含域子目录），列出所有记忆桶。
@@ -609,6 +618,8 @@ class BucketManager:
         dirs = [self.permanent_dir, self.dynamic_dir]
         if include_archive:
             dirs.append(self.archive_dir)
+        if include_iron_rules:
+            dirs.append(self.iron_rule_dir)
 
         for dir_path in dirs:
             if not os.path.exists(dir_path):
@@ -637,6 +648,7 @@ class BucketManager:
             "permanent_count": 0,
             "dynamic_count": 0,
             "archive_count": 0,
+            "iron_rule_count": 0,
             "total_size_kb": 0.0,
             "domains": {},
         }
@@ -645,6 +657,7 @@ class BucketManager:
             (self.permanent_dir, "permanent_count"),
             (self.dynamic_dir, "dynamic_count"),
             (self.archive_dir, "archive_count"),
+            (self.iron_rule_dir, "iron_rule_count"),
         ]:
             if not os.path.exists(subdir):
                 continue
@@ -712,13 +725,13 @@ class BucketManager:
     # ---------------------------------------------------------
     def _find_bucket_file(self, bucket_id: str) -> Optional[str]:
         """
-        Recursively search permanent/dynamic/archive for a bucket file
+        Recursively search permanent/dynamic/archive/iron_rule for a bucket file
         matching the given ID.
-        在 permanent/dynamic/archive 中递归查找指定 ID 的桶文件。
+        在 permanent/dynamic/archive/iron_rule 中递归查找指定 ID 的桶文件。
         """
         if not bucket_id:
             return None
-        for dir_path in [self.permanent_dir, self.dynamic_dir, self.archive_dir]:
+        for dir_path in [self.permanent_dir, self.dynamic_dir, self.archive_dir, self.iron_rule_dir]:
             if not os.path.exists(dir_path):
                 continue
             for root, _, files in os.walk(dir_path):
@@ -753,3 +766,29 @@ class BucketManager:
                 f"Failed to load bucket file / 加载桶文件失败: {file_path}: {e}"
             )
             return None
+
+    # ---------------------------------------------------------
+    # List all iron rules (sorted by priority)
+    # 列出所有红线铁则（按优先级排序）
+    # ---------------------------------------------------------
+    async def list_iron_rules(self) -> list[dict]:
+        """
+        List all iron rule buckets, sorted by priority (highest first).
+        列出所有红线铁则桶，按优先级降序排序。
+        """
+        if not os.path.exists(self.iron_rule_dir):
+            return []
+        
+        rules = []
+        for root, _, files in os.walk(self.iron_rule_dir):
+            for filename in files:
+                if not filename.endswith(".md"):
+                    continue
+                file_path = os.path.join(root, filename)
+                bucket = self._load_bucket(file_path)
+                if bucket and bucket.get("metadata", {}).get("type") == "iron_rule":
+                    rules.append(bucket)
+        
+        # Sort by priority (highest first)
+        rules.sort(key=lambda x: x.get("metadata", {}).get("priority", 0), reverse=True)
+        return rules
