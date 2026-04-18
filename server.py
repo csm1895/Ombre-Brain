@@ -594,6 +594,10 @@ async def breath(
     """检索记忆或浮现未解决记忆。query 为空时自动推送权重最高的未解决桶；有 query 时按关键词+情感检索。domain 逗号分隔，valence/arousal 传 0~1 启用情感共鸣，-1 忽略。"""
     await decay_engine.ensure_started()
 
+    # --- 注入当前北京时间 / Inject current Beijing time ---
+    now_cst = datetime.now(CST)
+    time_section = f"=== 🕐 当前时间 ===\n{now_cst.strftime('%Y年%m月%d日 %H:%M')} （北京时间）\n\n"
+
     # --- ALWAYS fetch iron rules first / 始终先获取红线铁则 ---
     iron_rules_section = ""
     try:
@@ -677,7 +681,7 @@ async def breath(
             and b["metadata"].get("type") not in ("permanent", "iron_rule", "user_state", "event")
         ]
         if not unresolved:
-            header = iron_rules_section + user_states_section + attachment_section
+            header = time_section + iron_rules_section + user_states_section + attachment_section
             if header:
                 return header.rstrip()
             return "权重池平静，没有需要处理的记忆。"
@@ -728,11 +732,11 @@ async def breath(
                 logger.warning(f"Failed to dehydrate surfaced bucket / 浮现脱水失败: {e}")
                 continue
         if not results:
-            header = iron_rules_section + user_states_section + attachment_section
+            header = time_section + iron_rules_section + user_states_section + attachment_section
             if header:
                 return header.rstrip()
             return "权重池平静，没有需要处理的记忆。"
-        return iron_rules_section + user_states_section + attachment_section + "=== 浮现记忆 ===\n" + "\n---\n".join(results)
+        return time_section + iron_rules_section + user_states_section + attachment_section + "=== 浮现记忆 ===\n" + "\n---\n".join(results)
 
     # --- With args: search mode / 有参数：检索模式 ---
     domain_filter = [d.strip() for d in domain.split(",") if d.strip()] or None
@@ -830,12 +834,12 @@ async def breath(
             logger.warning(f"Temporal ripple failed / 时间涟漪失败: {e}")
 
     if not results:
-        header = iron_rules_section + user_states_section + attachment_section
+        header = time_section + iron_rules_section + user_states_section + attachment_section
         if header:
             return header.rstrip()
         return "未找到相关记忆。"
 
-    return iron_rules_section + user_states_section + attachment_section + "\n---\n".join(results)
+    return time_section + iron_rules_section + user_states_section + attachment_section + "\n---\n".join(results)
 
 
 # =============================================================
@@ -1063,8 +1067,10 @@ async def pulse(include_archive: bool = False) -> str:
     except Exception as e:
         return f"获取系统状态失败: {e}"
 
+    now_cst = datetime.now(CST)
     status = (
         f"=== Ombre Brain 记忆系统 ===\n"
+        f"🕐 当前时间: {now_cst.strftime('%Y年%m月%d日 %H:%M')} （北京时间）\n"
         f"🔴 红线铁则: {stats['iron_rule_count']} 条\n"
         f"固化记忆桶: {stats['permanent_count']} 个\n"
         f"动态记忆桶: {stats['dynamic_count']} 个\n"
@@ -1610,6 +1616,57 @@ async def reconsolidate(
         )
     except Exception as e:
         return f"记忆重构失败: {e}"
+
+# ============================================================
+# 工具 16: check_logs — 自检运行日志
+# ============================================================
+@mcp.tool()
+async def check_logs(lines: int = 50) -> str:
+    """
+    读取最近的运行日志，自检系统状态。
+    lines: 返回最近多少行日志，默认50行。
+    """
+    import subprocess
+    now_cst = datetime.now(CST)
+    
+    log_sources = []
+    
+    # 1. 尝试读取系统日志文件
+    log_paths = [
+        "/var/log/ombre_brain.log",
+        "/app/logs/ombre_brain.log",
+        "/tmp/ombre_brain.log",
+    ]
+    
+    for log_path in log_paths:
+        if os.path.exists(log_path):
+            try:
+                result = subprocess.run(
+                    ["tail", f"-{lines}", log_path],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.stdout:
+                    log_sources.append(f"📄 来自日志文件 {log_path}:\n{result.stdout}")
+            except Exception:
+                pass
+    
+    # 2. 读取Python logging的handler
+    if not log_sources:
+        # 没有日志文件，返回系统状态作为替代
+        try:
+            stats = await bucket_mgr.get_stats()
+            uptime_info = f"系统运行中，当前时间 {now_cst.strftime('%Y-%m-%d %H:%M:%S')}"
+            return (
+                f"⚠️ 未找到日志文件，返回系统状态：\n\n"
+                f"{uptime_info}\n"
+                f"记忆桶总数: {stats['dynamic_count'] + stats['permanent_count'] + stats['iron_rule_count']}\n"
+                f"衰减引擎: {'运行中' if decay_engine.is_running else '已停止'}\n\n"
+                f"💡 提示：Zeabur容器环境日志通过平台界面查看更完整。"
+            )
+        except Exception as e:
+            return f"获取系统状态失败: {e}"
+    
+    return f"🕐 查询时间: {now_cst.strftime('%Y-%m-%d %H:%M:%S')}\n\n" + "\n\n".join(log_sources)
 
 # --- Entry point / 启动入口 ---
 if __name__ == "__main__":
