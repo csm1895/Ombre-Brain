@@ -1668,6 +1668,61 @@ async def check_logs(lines: int = 50) -> str:
     
     return f"🕐 查询时间: {now_cst.strftime('%Y-%m-%d %H:%M:%S')}\n\n" + "\n\n".join(log_sources)
 
+# ============================================================
+# 工具 17: see_image — 混元vision看图
+# ============================================================
+@mcp.tool()
+async def see_image(
+    image_url: str = "",
+    description_request: str = "请详细描述这张图片的内容",
+) -> str:
+    """
+    用腾讯混元vision模型看懂一张图片。
+    image_url: 图片的公开URL（需要是公开可访问的链接）
+    description_request: 对图片的提问，默认是"请详细描述这张图片的内容"
+    """
+    api_key = os.environ.get("HUNYUAN_API_KEY", "")
+    if not api_key:
+        return "❌ 未配置混元API Key，请在Zeabur环境变量里设置 HUNYUAN_API_KEY"
+
+    if not image_url or not image_url.strip():
+        return "❌ 请提供图片URL"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://api.hunyuan.cloud.tencent.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "hunyuan-vision",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": image_url.strip()}
+                                },
+                                {
+                                    "type": "text",
+                                    "text": description_request
+                                }
+                            ]
+                        }
+                    ],
+                    "max_tokens": 1000,
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            result = data["choices"][0]["message"]["content"]
+            return f"👁️ 图片分析结果：\n\n{result}"
+    except Exception as e:
+        return f"❌ 看图失败: {e}"
+
 # --- Entry point / 启动入口 ---
 if __name__ == "__main__":
     transport = config.get("transport", "stdio")
