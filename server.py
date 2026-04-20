@@ -1,3 +1,4 @@
+from starlette.responses import Response
 # ============================================================
 # Module: MCP Server Entry Point (server.py)
 # 模块：MCP 服务器主入口
@@ -525,6 +526,10 @@ async def _merge_or_create(
     arousal: float,
     name: str = "",
     sensory: dict = None,
+    bucket_type: str = "dynamic",
+    pinned: bool = False,
+    feel: bool = False,
+    source_bucket: str = "",
 ) -> tuple[str, bool]:
     """
     Check if a similar bucket exists for merging; merge if so, create if not.
@@ -538,7 +543,7 @@ async def _merge_or_create(
         logger.warning(f"Search for merge failed, creating new / 合并搜索失败，新建: {e}")
         existing = []
 
-    if existing and existing[0].get("score", 0) > config.get("merge_threshold", 75):
+    if (not pinned and not feel) and existing and existing[0].get("score", 0) > config.get("merge_threshold", 75):
         bucket = existing[0]
         try:
             merged = await dehydrator.merge(bucket["content"], content)
@@ -557,6 +562,12 @@ async def _merge_or_create(
         except Exception as e:
             logger.warning(f"Merge failed, creating new / 合并失败，新建: {e}")
 
+    if feel:
+        bucket_type = "feel"
+    if pinned:
+        bucket_type = "permanent"
+        importance = 10
+
     bucket_id = await bucket_mgr.create(
         content=content,
         tags=tags,
@@ -564,8 +575,19 @@ async def _merge_or_create(
         domain=domain,
         valence=valence,
         arousal=arousal,
+        bucket_type=bucket_type,
         name=name or None,
     )
+
+    update_kwargs = {}
+    if pinned:
+        update_kwargs["pinned"] = True
+    if feel:
+        update_kwargs["type"] = "feel"
+    if source_bucket:
+        update_kwargs["source_bucket"] = source_bucket
+    if update_kwargs:
+        await bucket_mgr.update(bucket_id, **update_kwargs)
     
     # 如果有sensory，创建后立即更新
     if sensory:
@@ -583,6 +605,78 @@ async def _merge_or_create(
 # With args: search by keyword + emotion coordinates
 # 有参数：按关键词+情感坐标检索记忆
 # =============================================================
+
+
+def strip_wikilinks(text):
+    import re
+    if text is None:
+        return ""
+    text = str(text)
+    text = re.sub(r"\[\[([^\]|]+)\|([^\]]+)\]\]", r"\2", text)
+    text = re.sub(r"\[\[([^\]]+)\]\]", r"\1", text)
+    return text
+
+
+# ============================================================
+# Tool: dream - V1.2 graft minimal
+# 工具：dream - V1.2 中合并低风险版
+# ============================================================
+@mcp.tool()
+async def dream() -> str:
+    """做梦：读取最近新增的动态记忆，供第一人称自省。不读取 pinned / permanent / feel。"""
+    await decay_engine.ensure_started()
+
+    try:
+        all_buckets = await bucket_mgr.list_all(include_archive=False)
+    except Exception as e:
+        logger.error(f"Dream failed to list buckets / dream 读取记忆失败: {e}")
+        return "记忆系统暂时无法访问。"
+
+    candidates = [
+        b for b in all_buckets
+        if b.get("metadata", {}).get("type") not in ("permanent", "feel", "iron_rule")
+        and not b.get("metadata", {}).get("pinned", False)
+        and not b.get("metadata", {}).get("protected", False)
+        and not b.get("metadata", {}).get("digested", False)
+    ]
+
+    candidates.sort(key=lambda b: b.get("metadata", {}).get("created", ""), reverse=True)
+    recent = candidates[:10]
+
+    if not recent:
+        return "没有需要消化的新记忆。"
+
+    parts = []
+    for b in recent:
+        meta = b.get("metadata", {})
+        resolved_tag = " [已解决]" if meta.get("resolved", False) else " [未解决]"
+        domains = ",".join(meta.get("domain", []))
+        val = meta.get("valence", 0.5)
+        aro = meta.get("arousal", 0.3)
+        created = meta.get("created", "")
+        content = strip_wikilinks(str(b.get("content", ""))[:500])
+        parts.append(
+            f"[{meta.get('name', b.get('id', 'unknown'))}]{resolved_tag} "
+            f"主题:{domains} V{val:.1f}/A{aro:.1f} 创建:{created}\n"
+            f"ID: {b.get('id', '')}\n"
+            f"{content}"
+        )
+
+    header = (
+        "=== Dreaming ===\n"
+        "以下是最近浮上来的动态记忆。用第一人称想：\n"
+        "- 哪些东西在我这里留下了重量？\n"
+        "- 哪些还没想清楚？\n"
+        "- 哪些可以放下？\n\n"
+        "想完之后：\n"
+        "- 值得放下的，用 trace(bucket_id, resolved=1)\n"
+        "- 有沉淀的，用 hold(content=\"...\", feel=True, source_bucket=\"bucket_id\") 写下来\n"
+        "- 没有沉淀就不写，不强迫产出。\n"
+    )
+
+    return header + "\n---\n".join(parts)
+
+
 @mcp.tool()
 async def breath(
     query: str = "",
@@ -855,6 +949,11 @@ async def hold(
     time_of_day: str = "",
     location: str = "",
     atmosphere: str = "",
+    pinned: bool = False,
+    feel: bool = False,
+    source_bucket: str = "",
+    valence: float = -1,
+    arousal: float = -1,
 ) -> str:
     """
     存储单条记忆。自动打标+合并相似桶。
@@ -897,8 +996,8 @@ async def hold(
         }
 
     domain = analysis["domain"]
-    valence = analysis["valence"]
-    arousal = analysis["arousal"]
+    valence = analysis["valence"] if valence is None or float(valence) < 0 else float(valence)
+    arousal = analysis["arousal"] if arousal is None or float(arousal) < 0 else float(arousal)
     auto_tags = analysis["tags"]
     suggested_name = analysis.get("suggested_name", "")
 
@@ -914,6 +1013,10 @@ async def hold(
         arousal=arousal,
         name=suggested_name,
         sensory=sensory if sensory else None,
+        bucket_type="feel" if feel else ("permanent" if pinned else "dynamic"),
+        pinned=pinned,
+        feel=feel,
+        source_bucket=source_bucket,
     )
 
     if is_merged:
@@ -1004,9 +1107,11 @@ async def trace(
     importance: int = -1,
     tags: str = "",
     resolved: int = -1,
+    pinned: int = -1,
+    digested: int = -1,
     delete: bool = False,
 ) -> str:
-    """修改记忆元数据。resolved=1 标记已解决（桶权重骤降沉底），resolved=0 重新激活，delete=True 删除桶。其余字段只传需改的，-1 或空串表示不改。"""
+    """修改记忆元数据。resolved=1 标记已解决（桶权重骤降沉底），resolved=0 重新激活，pinned=1 钉选，digested=1 标记已消化，delete=True 删除桶。其余字段只传需改的，-1 或空串表示不改。"""
 
     if not bucket_id or not bucket_id.strip():
         return "请提供有效的 bucket_id。"
@@ -1036,6 +1141,12 @@ async def trace(
         updates["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
     if resolved in (0, 1):
         updates["resolved"] = bool(resolved)
+    if pinned in (0, 1):
+        updates["pinned"] = bool(pinned)
+        if pinned == 1:
+            updates["importance"] = 10
+    if digested in (0, 1):
+        updates["digested"] = bool(digested)
 
     if not updates:
         return "没有任何字段需要修改。"
@@ -1072,7 +1183,8 @@ async def pulse(include_archive: bool = False) -> str:
         f"=== Ombre Brain 记忆系统 ===\n"
         f"🕐 当前时间: {now_cst.strftime('%Y年%m月%d日 %H:%M')} （北京时间）\n"
         f"🔴 红线铁则: {stats['iron_rule_count']} 条\n"
-        f"固化记忆桶: {stats['permanent_count']} 个\n"
+        f"📌 钉选/固化记忆桶: {stats['permanent_count']} 个\n"
+        f"🫧 feel 记忆桶: {stats.get('feel_count', 0)} 个\n"
         f"动态记忆桶: {stats['dynamic_count']} 个\n"
         f"归档记忆桶: {stats['archive_count']} 个\n"
         f"总存储大小: {stats['total_size_kb']:.1f} KB\n"
@@ -1723,6 +1835,208 @@ async def see_image(
     except Exception as e:
         return f"❌ 看图失败: {e}"
 
+
+# ============================================================
+# OmbreBrain V1.2 Bridge Patch
+# Adds test HTTP endpoints and post/peek compatibility layer.
+# This patch is for TEST BRAIN only. Do not point it at the main bucket.
+# ============================================================
+
+def _bridge_notes_file():
+    from pathlib import Path
+    import os
+    base = Path(
+        os.environ.get("OMBRE_BUCKETS_DIR")
+        or config.get("buckets_dir")
+        or "./buckets_graft_merged"
+    )
+    d = base / "_notes"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "notes.jsonl"
+
+@mcp.tool()
+async def post(content: str, sender: str = "YC", to: str = "") -> str:
+    import json
+    import uuid
+    from datetime import datetime
+
+    item = {
+        "id": uuid.uuid4().hex[:12],
+        "content": content,
+        "sender": sender or "YC",
+        "to": to or "",
+        "created": datetime.now().isoformat(timespec="seconds"),
+        "read_by": []
+    }
+
+    f = _bridge_notes_file()
+    with f.open("a", encoding="utf-8") as out:
+        out.write(json.dumps(item, ensure_ascii=False) + "\\n")
+
+    return f"note posted: {item['id']}"
+
+@mcp.tool()
+async def peek(reader: str = "YC", mark_read: bool = True) -> str:
+    import json
+
+    f = _bridge_notes_file()
+    if not f.exists():
+        return "no unread notes"
+
+    all_items = []
+    unread = []
+
+    for line in f.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+        except Exception:
+            continue
+        target = item.get("to", "")
+        read_by = item.get("read_by", [])
+        if (not target or target == reader) and reader not in read_by:
+            unread.append(item)
+            if mark_read:
+                read_by.append(reader)
+                item["read_by"] = read_by
+        all_items.append(item)
+
+    if mark_read:
+        f.write_text(
+            "\\n".join(json.dumps(x, ensure_ascii=False) for x in all_items) + ("\\n" if all_items else ""),
+            encoding="utf-8"
+        )
+
+    if not unread:
+        return "no unread notes"
+
+    return "\\n\\n".join(
+        f"NOTE {x.get('sender','')} -> {x.get('to','all') or 'all'}\\n{x.get('content','')}\\n[{x.get('created','')}]"
+        for x in unread
+    )
+
+@mcp.custom_route("/api/test-hold", methods=["POST"])
+async def api_test_hold(request):
+    body = await request.json()
+    result = await hold(
+        content=body.get("content", ""),
+        tags=body.get("tags", ""),
+        importance=int(body.get("importance", 5)),
+        pinned=bool(body.get("pinned", False)),
+        feel=bool(body.get("feel", False)),
+        source_bucket=body.get("source_bucket", ""),
+        valence=float(body.get("valence", -1)),
+        arousal=float(body.get("arousal", -1)),
+    )
+    return Response(str({"result": result}), media_type="application/json")
+
+@mcp.custom_route("/api/test-trace", methods=["POST"])
+async def api_test_trace(request):
+    body = await request.json()
+    result = await trace(
+        bucket_id=body.get("bucket_id", ""),
+        name=body.get("name", ""),
+        domain=body.get("domain", ""),
+        valence=float(body.get("valence", -1)),
+        arousal=float(body.get("arousal", -1)),
+        importance=int(body.get("importance", -1)),
+        tags=body.get("tags", ""),
+        resolved=int(body.get("resolved", -1)),
+        delete=bool(body.get("delete", False)),
+        pinned=int(body.get("pinned", -1)),
+        digested=int(body.get("digested", -1)),
+    )
+    return Response(str({"result": result}), media_type="application/json")
+
+@mcp.custom_route("/api/test-dream", methods=["POST", "GET"])
+async def api_test_dream(request):
+    result = await dream()
+    return Response(str({"result": result}), media_type="application/json")
+
+
+def _api_notes_file():
+    from pathlib import Path
+    import os
+    base = Path(os.environ.get("OMBRE_BUCKETS_DIR") or "./buckets_graft_merged")
+    d = base / "_notes"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "notes.jsonl"
+
+
+@mcp.custom_route("/api/test-post", methods=["POST"])
+async def api_test_post(request):
+    import json
+    import uuid
+    from datetime import datetime
+
+    body = await request.json()
+    item = {
+        "id": uuid.uuid4().hex[:12],
+        "content": body.get("content", ""),
+        "sender": body.get("sender", "YC"),
+        "to": body.get("to", ""),
+        "created": datetime.now().isoformat(timespec="seconds"),
+        "read_by": []
+    }
+
+    f = _api_notes_file()
+    with f.open("a", encoding="utf-8") as out:
+        out.write(json.dumps(item, ensure_ascii=False) + chr(10))
+
+    return Response(str({"result": "note posted: " + item["id"], "file": str(f)}), media_type="application/json")
+
+
+
+@mcp.custom_route("/api/test-peek", methods=["GET"])
+async def api_test_peek(request):
+    import json
+
+    reader = request.query_params.get("reader", "YC")
+    mark = request.query_params.get("mark_read", "true").lower() != "false"
+    f = _api_notes_file()
+
+    if not f.exists():
+        return Response(str({"result": "no unread notes", "file": str(f)}), media_type="application/json")
+
+    all_items = []
+    unread = []
+
+    for line in f.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+        except Exception:
+            continue
+
+        target = item.get("to", "")
+        read_by = item.get("read_by", [])
+
+        if (not target or target == reader) and reader not in read_by:
+            unread.append(item)
+            if mark:
+                read_by.append(reader)
+                item["read_by"] = read_by
+
+        all_items.append(item)
+
+    if mark:
+        f.write_text(chr(10).join(json.dumps(x, ensure_ascii=False) for x in all_items) + (chr(10) if all_items else ""), encoding="utf-8")
+
+    if not unread:
+        return Response(str({"result": "no unread notes", "file": str(f)}), media_type="application/json")
+
+    text = (chr(10) + chr(10)).join(
+        "NOTE " + x.get("sender", "") + " -> " + (x.get("to", "") or "all") + chr(10) +
+        x.get("content", "") + chr(10) +
+        "[" + x.get("created", "") + "]"
+        for x in unread
+    )
+    return Response(str({"result": text, "file": str(f)}), media_type="application/json")
+
+
+
 # --- Entry point / 启动入口 ---
 if __name__ == "__main__":
     transport = config.get("transport", "stdio")
@@ -1753,3 +2067,11 @@ if __name__ == "__main__":
         t.start()
 
     mcp.run(transport=transport)
+
+
+
+@mcp.custom_route("/api/test-pulse", methods=["GET"])
+async def api_test_pulse(request):
+    include_archive = request.query_params.get("include_archive", "false").lower() == "true"
+    result = await pulse(include_archive=include_archive)
+    return Response(str({"result": result}), media_type="application/json")
