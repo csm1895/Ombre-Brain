@@ -60,6 +60,7 @@ class BucketManager:
         self.permanent_dir = os.path.join(self.base_dir, "permanent")
         self.dynamic_dir = os.path.join(self.base_dir, "dynamic")
         self.archive_dir = os.path.join(self.base_dir, "archive")
+        self.feel_dir = os.path.join(self.base_dir, "feel")
         self.iron_rule_dir = os.path.join(self.base_dir, "iron_rules")  # 新增：红线铁则目录
         self.fuzzy_threshold = config.get("matching", {}).get("fuzzy_threshold", 50)
         self.max_results = config.get("matching", {}).get("max_results", 5)
@@ -143,6 +144,8 @@ class BucketManager:
             type_dir = self.permanent_dir
         elif bucket_type == "iron_rule":
             type_dir = self.iron_rule_dir
+        elif bucket_type == "feel":
+            type_dir = self.feel_dir
         else:
             type_dir = self.dynamic_dir
         
@@ -222,6 +225,15 @@ class BucketManager:
             post["tags"] = kwargs["tags"]
         if "importance" in kwargs:
             post["importance"] = max(1, min(10, int(kwargs["importance"])))
+
+        if "pinned" in kwargs:
+            post["pinned"] = bool(kwargs["pinned"])
+            if kwargs["pinned"]:
+                post["importance"] = 10
+                post["type"] = "permanent"
+
+        if "digested" in kwargs:
+            post["digested"] = bool(kwargs["digested"])
         if "domain" in kwargs:
             post["domain"] = kwargs["domain"]
         if "valence" in kwargs:
@@ -639,7 +651,7 @@ class BucketManager:
         """
         buckets = []
 
-        dirs = [self.permanent_dir, self.dynamic_dir]
+        dirs = [self.permanent_dir, self.dynamic_dir, self.feel_dir]
         if include_archive:
             dirs.append(self.archive_dir)
         if include_iron_rules:
@@ -672,6 +684,7 @@ class BucketManager:
             "permanent_count": 0,
             "dynamic_count": 0,
             "archive_count": 0,
+            "feel_count": 0,
             "iron_rule_count": 0,
             "total_size_kb": 0.0,
             "domains": {},
@@ -681,6 +694,7 @@ class BucketManager:
             (self.permanent_dir, "permanent_count"),
             (self.dynamic_dir, "dynamic_count"),
             (self.archive_dir, "archive_count"),
+            (self.feel_dir, "feel_count"),
             (self.iron_rule_dir, "iron_rule_count"),
         ]:
             if not os.path.exists(subdir):
@@ -755,7 +769,7 @@ class BucketManager:
         """
         if not bucket_id:
             return None
-        for dir_path in [self.permanent_dir, self.dynamic_dir, self.archive_dir, self.iron_rule_dir]:
+        for dir_path in [self.permanent_dir, self.dynamic_dir, self.archive_dir, self.iron_rule_dir, self.feel_dir]:
             if not os.path.exists(dir_path):
                 continue
             for root, _, files in os.walk(dir_path):

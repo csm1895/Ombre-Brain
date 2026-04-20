@@ -10,3 +10,10 @@ buckets/dynamic/
 buckets/archive/
 buckets/permanent/
 scarp_paper
+
+# local graft test artifacts
+.DS_Store
+_backup_before_graft/
+buckets_graft_merged/
+buckets_graft_test/
+v12_dream_extract.txt
