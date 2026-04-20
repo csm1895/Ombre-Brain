@@ -1800,8 +1800,31 @@ async def see_image(
     if not image_url or not image_url.strip():
         return "❌ 请提供图片URL"
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+    import base64 as b64mod
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        image_content = None
+        media_type = "image/jpeg"
+        try:
+            dl_headers = {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": image_url.strip(),
+            }
+            img_resp = await client.get(image_url.strip(), headers=dl_headers, timeout=15.0, follow_redirects=True)
+            if img_resp.status_code == 200:
+                raw = img_resp.content
+                ct = img_resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+                media_type = ct if ct.startswith("image/") else "image/jpeg"
+                image_content = b64mod.b64encode(raw).decode("utf-8")
+        except Exception:
+            pass
+
+        if image_content:
+            image_part = {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{image_content}"}}
+        else:
+            image_part = {"type": "image_url", "image_url": {"url": image_url.strip()}}
+
+        try:
             response = await client.post(
                 "https://api.hunyuan.cloud.tencent.com/v1/chat/completions",
                 headers={
@@ -1814,10 +1837,7 @@ async def see_image(
                         {
                             "role": "user",
                             "content": [
-                                {
-                                    "type": "image_url",
-                                    "image_url": {"url": image_url.strip()}
-                                },
+                                image_part,
                                 {
                                     "type": "text",
                                     "text": description_request
@@ -1831,9 +1851,10 @@ async def see_image(
             response.raise_for_status()
             data = response.json()
             result = data["choices"][0]["message"]["content"]
-            return f"👁️ 图片分析结果：\n\n{result}"
-    except Exception as e:
-        return f"❌ 看图失败: {e}"
+            mode = "base64" if image_content else "URL直传"
+            return f"👁️图片分析结果（{mode}）：\n\n{result}"
+        except Exception as e:
+            return f"❌ 看图失败：{e}"
 
 
 # ============================================================
