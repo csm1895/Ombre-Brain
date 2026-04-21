@@ -372,7 +372,12 @@ def render_markdown(
         lines.append("无。")
     else:
         for b in high_items:
+            preview = str(b.get("body_preview", "")).strip()
+            if len(preview) > 120:
+                preview = preview[:120].rstrip() + "..."
             lines.append(f"- `{b.get('id')}` {b.get('name') or ''} | type={b.get('type')} | importance={b.get('importance')}")
+            if preview:
+                lines.append(f"  - preview: {preview}")
     lines.append("")
 
     lines.append("## 七、需要人工确认")
