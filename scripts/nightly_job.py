@@ -18,6 +18,7 @@ import json
 import os
 import re
 import uuid
+import traceback
 from datetime import datetime, date
 from pathlib import Path
 from typing import Any
@@ -139,6 +140,27 @@ def load_notes(root: Path, since: str, until: str) -> list[dict[str, Any]]:
     return notes
 
 
+def write_error_log(out_dir: Path, run_id: str, err: BaseException) -> Path:
+    """Write failure details to _nightly_logs/errors."""
+    err_dir = out_dir / "errors"
+    err_dir.mkdir(parents=True, exist_ok=True)
+    path = err_dir / f"nightly_error_{datetime.now().strftime('%Y-%m-%d')}_{run_id}.log"
+    path.write_text(
+        "\n".join(
+            [
+                f"run_id: {run_id}",
+                f"created_at: {now_iso()}",
+                f"error_type: {type(err).__name__}",
+                f"error: {err}",
+                "",
+                traceback.format_exc(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def render_markdown(
     *,
     run_id: str,
@@ -238,33 +260,41 @@ def main() -> None:
 
     since = args.since or args.date
     until = args.until or args.date
-    if since > until:
-        raise SystemExit(f"Invalid date range: since {since} > until {until}")
-
     run_id = uuid.uuid4().hex[:12]
-    buckets = load_buckets(root, since, until)
-    notes = load_notes(root, since, until)
 
-    md = render_markdown(
-        run_id=run_id,
-        root=root,
-        target_date=args.date,
-        since=since,
-        until=until,
-        buckets=buckets,
-        notes=notes,
-    )
+    try:
+        if since > until:
+            raise ValueError(f"Invalid date range: since {since} > until {until}")
 
-    out_path = out_dir / f"nightly_{args.date}_{run_id}.md"
-    out_path.write_text(md, encoding="utf-8")
+        buckets = load_buckets(root, since, until)
+        notes = load_notes(root, since, until)
 
-    print(f"nightly_job v0.1 readonly OK")
-    print(f"date: {args.date}")
-    print(f"since: {since}")
-    print(f"until: {until}")
-    print(f"buckets: {len(buckets)}")
-    print(f"notes: {len(notes)}")
-    print(f"output: {out_path}")
+        md = render_markdown(
+            run_id=run_id,
+            root=root,
+            target_date=args.date,
+            since=since,
+            until=until,
+            buckets=buckets,
+            notes=notes,
+        )
+
+        out_path = out_dir / f"nightly_{args.date}_{run_id}.md"
+        out_path.write_text(md, encoding="utf-8")
+
+        print(f"nightly_job v0.1 readonly OK")
+        print(f"date: {args.date}")
+        print(f"since: {since}")
+        print(f"until: {until}")
+        print(f"buckets: {len(buckets)}")
+        print(f"notes: {len(notes)}")
+        print(f"output: {out_path}")
+    except Exception as err:
+        err_path = write_error_log(out_dir, run_id, err)
+        print("nightly_job v0.1 readonly FAILED")
+        print(f"run_id: {run_id}")
+        print(f"error_log: {err_path}")
+        raise
 
 
 if __name__ == "__main__":
