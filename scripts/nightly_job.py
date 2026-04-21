@@ -140,7 +140,7 @@ def load_notes(root: Path, since: str, until: str) -> list[dict[str, Any]]:
     return notes
 
 
-def render_note_preview(target_date: str, since: str, until: str, buckets: list[dict[str, Any]], notes: list[dict[str, Any]], out_path: Path) -> str:
+def render_note_preview(target_date: str, since: str, until: str, buckets: list[dict[str, Any]], notes: list[dict[str, Any]], out_path: Path, max_chars: int = 2500) -> str:
     """Render a short note-style preview. This does not send anything."""
     lines: list[str] = []
     lines.append(f"【nightly_job v0.1 只读草稿｜{target_date}】")
@@ -162,7 +162,10 @@ def render_note_preview(target_date: str, since: str, until: str, buckets: list[
     lines.append(f"草稿文件：{out_path}")
     lines.append("")
     lines.append("以上为只读草稿，未写入主脑，未发送便利贴。")
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    if max_chars > 0 and len(text) > max_chars:
+        text = text[:max_chars].rstrip() + "\n\n……已截断，完整内容见草稿文件。"
+    return text
 
 
 def write_error_log(out_dir: Path, run_id: str, err: BaseException) -> Path:
@@ -278,6 +281,7 @@ def main() -> None:
     parser.add_argument("--until", default="", help="End date YYYY-MM-DD. Overrides --date when provided.")
     parser.add_argument("--out-dir", default="_nightly_logs")
     parser.add_argument("--note-preview", action="store_true", help="Also write a note-style preview file. Does not send.")
+    parser.add_argument("--max-preview-chars", type=int, default=2500, help="Max chars for note preview. <=0 means no limit.")
     args = parser.parse_args()
 
     root = Path(args.root).expanduser().resolve()
@@ -310,7 +314,7 @@ def main() -> None:
 
         note_path = None
         if args.note_preview:
-            note_text = render_note_preview(args.date, since, until, buckets, notes, out_path)
+            note_text = render_note_preview(args.date, since, until, buckets, notes, out_path, args.max_preview_chars)
             note_path = out_dir / f"nightly_note_preview_{args.date}_{run_id}.txt"
             note_path.write_text(note_text, encoding="utf-8")
 
