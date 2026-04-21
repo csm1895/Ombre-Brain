@@ -17,3 +17,8 @@ _backup_before_graft/
 buckets_graft_merged/
 buckets_graft_test/
 v12_dream_extract.txt
+
+# nightly_job local test artifacts
+_nightly_logs/
+buckets_graft_merged/dynamic/nightly_test/
+buckets_graft_merged/_notes/notes.jsonl

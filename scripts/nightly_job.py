@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""
+OmbreBrain nightly_job v0.1 readonly draft.
+
+只读演练：
+- 读取当天新增 buckets
+- 读取 notes
+- 生成本地 markdown 草稿
+- 不写主脑
+- 不修改 bucket
+- 不调用 hold/grow/trace
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import uuid
+from datetime import datetime, date
+from pathlib import Path
+from typing import Any
+
+
+def now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def today_str() -> str:
+    return date.today().isoformat()
+
+
+def strip_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    if not text.startswith("---"):
+        return {}, text
+
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return {}, text
+
+    raw_meta = parts[1]
+    body = parts[2].strip()
+
+    meta: dict[str, Any] = {}
+    current_key = None
+
+    for line in raw_meta.splitlines():
+        if not line.strip():
+            continue
+
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*:", line):
+            key, value = line.split(":", 1)
+            key = key.strip()
+            value = value.strip().strip("'").strip('"')
+            meta[key] = value
+            current_key = key
+        elif line.strip().startswith("- ") and current_key:
+            meta.setdefault(current_key, [])
+            if not isinstance(meta[current_key], list):
+                meta[current_key] = [meta[current_key]]
+            meta[current_key].append(line.strip()[2:].strip())
+
+    return meta, body
+
+
+def load_buckets(root: Path, target_date: str) -> list[dict[str, Any]]:
+    buckets: list[dict[str, Any]] = []
+
+    if not root.exists():
+        return buckets
+
+    for path in root.rglob("*.md"):
+        if "_nightly_logs" in path.parts:
+            continue
+
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+
+        meta, body = strip_frontmatter(text)
+        created = str(meta.get("created", ""))
+
+        if target_date and not created.startswith(target_date):
+            continue
+
+        buckets.append(
+            {
+                "path": str(path),
+                "id": meta.get("id", path.stem),
+                "name": meta.get("name", path.stem),
+                "type": meta.get("type", ""),
+                "importance": meta.get("importance", ""),
+                "created": created,
+                "last_active": meta.get("last_active", ""),
+                "domain": meta.get("domain", ""),
+                "tags": meta.get("tags", []),
+                "body_preview": body[:300].replace("\n", " "),
+            }
+        )
+
+    return buckets
+
+
+def load_notes(root: Path, target_date: str) -> list[dict[str, Any]]:
+    notes_file = root / "_notes" / "notes.jsonl"
+    if not notes_file.exists():
+        return []
+
+    notes: list[dict[str, Any]] = []
+    for line in notes_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except Exception:
+            continue
+
+        created = str(item.get("created", ""))
+        if target_date and not created.startswith(target_date):
+            continue
+
+        notes.append(item)
+
+    return notes
+
+
+def render_markdown(
+    *,
+    run_id: str,
+    root: Path,
+    target_date: str,
+    buckets: list[dict[str, Any]],
+    notes: list[dict[str, Any]],
+) -> str:
+    lines: list[str] = []
+
+    lines.append(f"# nightly_job v0.1 只读草稿｜{target_date}")
+    lines.append("")
+    lines.append(f"- run_id: `{run_id}`")
+    lines.append(f"- created_at: `{now_iso()}`")
+    lines.append(f"- buckets_root: `{root}`")
+    lines.append("- mode: `dry_run / readonly`")
+    lines.append("- 写入主脑: 否")
+    lines.append("- 调用 DeepSeek: 否，当前为本地 mock 草稿")
+    lines.append("")
+
+    lines.append("## 一、今日读取概览")
+    lines.append("")
+    lines.append(f"- 当天新增/活跃记忆桶：{len(buckets)}")
+    lines.append(f"- 当天便利贴：{len(notes)}")
+    lines.append("")
+
+    lines.append("## 二、今日小传草稿")
+    lines.append("")
+    if not buckets and not notes:
+        lines.append("今天没有读取到新的本地记忆碎片。")
+    else:
+        lines.append("今天读取到以下新增材料。此处只是只读草稿，后续可接 DeepSeek 生成更自然的小传。")
+    lines.append("")
+
+    lines.append("## 三、当天记忆桶")
+    lines.append("")
+    if not buckets:
+        lines.append("无。")
+    else:
+        for b in buckets:
+            lines.append(f"### {b.get('name') or b.get('id')}")
+            lines.append("")
+            lines.append(f"- id: `{b.get('id')}`")
+            lines.append(f"- type: `{b.get('type')}`")
+            lines.append(f"- importance: `{b.get('importance')}`")
+            lines.append(f"- created: `{b.get('created')}`")
+            lines.append(f"- tags: `{', '.join(b.get('tags') or []) if isinstance(b.get('tags'), list) else b.get('tags')}`")
+            lines.append("")
+            lines.append("> " + str(b.get("body_preview", "")).replace("\n", " "))
+            lines.append("")
+
+    lines.append("## 四、当天便利贴")
+    lines.append("")
+    if not notes:
+        lines.append("无。")
+    else:
+        for n in notes:
+            lines.append(f"- `{n.get('created', '')}` {n.get('sender', '')} -> {n.get('to', '') or 'all'}：{n.get('content', '')}")
+
+    lines.append("")
+    lines.append("## 五、未完成事项变化")
+    lines.append("")
+    lines.append("v0.1 暂未自动判断。后续接 DeepSeek 后生成候选，不直接写入。")
+    lines.append("")
+
+    lines.append("## 六、长期记忆候选")
+    lines.append("")
+    lines.append("v0.1 暂未自动判断。后续只列候选，等待倩倩或叶辰一确认。")
+    lines.append("")
+
+    lines.append("## 七、需要人工确认")
+    lines.append("")
+    lines.append("- 当前草稿未写入主脑。")
+    lines.append("- 当前草稿未修改任何长期规则。")
+    lines.append("- 当前草稿未调用 hold/grow/trace。")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", default=os.environ.get("OMBRE_BUCKETS_DIR", "buckets"))
+    parser.add_argument("--date", default=today_str())
+    parser.add_argument("--out-dir", default="_nightly_logs")
+    args = parser.parse_args()
+
+    root = Path(args.root).expanduser().resolve()
+    out_dir = Path(args.out_dir).expanduser().resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    run_id = uuid.uuid4().hex[:12]
+    buckets = load_buckets(root, args.date)
+    notes = load_notes(root, args.date)
+
+    md = render_markdown(
+        run_id=run_id,
+        root=root,
+        target_date=args.date,
+        buckets=buckets,
+        notes=notes,
+    )
+
+    out_path = out_dir / f"nightly_{args.date}_{run_id}.md"
+    out_path.write_text(md, encoding="utf-8")
+
+    print(f"nightly_job v0.1 readonly OK")
+    print(f"date: {args.date}")
+    print(f"buckets: {len(buckets)}")
+    print(f"notes: {len(notes)}")
+    print(f"output: {out_path}")
+
+
+if __name__ == "__main__":
+    main()
