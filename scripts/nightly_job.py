@@ -140,6 +140,40 @@ def load_notes(root: Path, since: str, until: str) -> list[dict[str, Any]]:
     return notes
 
 
+def render_json_summary(
+    *,
+    run_id: str,
+    target_date: str,
+    since: str,
+    until: str,
+    root: Path,
+    out_path: Path,
+    buckets: list[dict[str, Any]],
+    notes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Machine-readable summary for automation. Readonly."""
+    return {
+        "schema": "nightly_job.v0.1.readonly.summary",
+        "run_id": run_id,
+        "created_at": now_iso(),
+        "target_date": target_date,
+        "since": since,
+        "until": until,
+        "root": str(root),
+        "mode": "dry_run/readonly",
+        "writes_main_brain": False,
+        "calls_deepseek": False,
+        "calls_hold_grow_trace": False,
+        "counts": {
+            "buckets": len(buckets),
+            "notes": len(notes),
+        },
+        "bucket_ids": [str(b.get("id", "")) for b in buckets],
+        "note_ids": [str(n.get("id", "")) for n in notes],
+        "markdown_output": str(out_path),
+    }
+
+
 def render_note_preview(target_date: str, since: str, until: str, buckets: list[dict[str, Any]], notes: list[dict[str, Any]], out_path: Path, max_chars: int = 2500) -> str:
     """Render a short note-style preview. This does not send anything."""
     lines: list[str] = []
@@ -282,6 +316,7 @@ def main() -> None:
     parser.add_argument("--out-dir", default="_nightly_logs")
     parser.add_argument("--note-preview", action="store_true", help="Also write a note-style preview file. Does not send.")
     parser.add_argument("--max-preview-chars", type=int, default=2500, help="Max chars for note preview. <=0 means no limit.")
+    parser.add_argument("--json-summary", action="store_true", help="Also write a machine-readable JSON summary.")
     args = parser.parse_args()
 
     root = Path(args.root).expanduser().resolve()
@@ -318,6 +353,21 @@ def main() -> None:
             note_path = out_dir / f"nightly_note_preview_{args.date}_{run_id}.txt"
             note_path.write_text(note_text, encoding="utf-8")
 
+        json_path = None
+        if args.json_summary:
+            summary = render_json_summary(
+                run_id=run_id,
+                target_date=args.date,
+                since=since,
+                until=until,
+                root=root,
+                out_path=out_path,
+                buckets=buckets,
+                notes=notes,
+            )
+            json_path = out_dir / f"nightly_summary_{args.date}_{run_id}.json"
+            json_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
         print(f"nightly_job v0.1 readonly OK")
         print(f"date: {args.date}")
         print(f"since: {since}")
@@ -327,6 +377,8 @@ def main() -> None:
         print(f"output: {out_path}")
         if note_path:
             print(f"note_preview: {note_path}")
+        if json_path:
+            print(f"json_summary: {json_path}")
     except Exception as err:
         err_path = write_error_log(out_dir, run_id, err)
         print("nightly_job v0.1 readonly FAILED")
