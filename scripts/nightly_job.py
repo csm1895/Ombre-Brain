@@ -31,6 +31,18 @@ def today_str() -> str:
     return date.today().isoformat()
 
 
+def date_in_range(value: str, since: str, until: str) -> bool:
+    """Return True if ISO datetime/date string is inside [since, until]."""
+    if not value:
+        return False
+    day = value[:10]
+    if since and day < since:
+        return False
+    if until and day > until:
+        return False
+    return True
+
+
 def strip_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     if not text.startswith("---"):
         return {}, text
@@ -64,7 +76,7 @@ def strip_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     return meta, body
 
 
-def load_buckets(root: Path, target_date: str) -> list[dict[str, Any]]:
+def load_buckets(root: Path, since: str, until: str) -> list[dict[str, Any]]:
     buckets: list[dict[str, Any]] = []
 
     if not root.exists():
@@ -82,7 +94,7 @@ def load_buckets(root: Path, target_date: str) -> list[dict[str, Any]]:
         meta, body = strip_frontmatter(text)
         created = str(meta.get("created", ""))
 
-        if target_date and not created.startswith(target_date):
+        if not date_in_range(created, since, until):
             continue
 
         buckets.append(
@@ -103,7 +115,7 @@ def load_buckets(root: Path, target_date: str) -> list[dict[str, Any]]:
     return buckets
 
 
-def load_notes(root: Path, target_date: str) -> list[dict[str, Any]]:
+def load_notes(root: Path, since: str, until: str) -> list[dict[str, Any]]:
     notes_file = root / "_notes" / "notes.jsonl"
     if not notes_file.exists():
         return []
@@ -119,7 +131,7 @@ def load_notes(root: Path, target_date: str) -> list[dict[str, Any]]:
             continue
 
         created = str(item.get("created", ""))
-        if target_date and not created.startswith(target_date):
+        if not date_in_range(created, since, until):
             continue
 
         notes.append(item)
@@ -132,6 +144,8 @@ def render_markdown(
     run_id: str,
     root: Path,
     target_date: str,
+    since: str,
+    until: str,
     buckets: list[dict[str, Any]],
     notes: list[dict[str, Any]],
 ) -> str:
@@ -142,6 +156,8 @@ def render_markdown(
     lines.append(f"- run_id: `{run_id}`")
     lines.append(f"- created_at: `{now_iso()}`")
     lines.append(f"- buckets_root: `{root}`")
+    lines.append(f"- since: `{since}`")
+    lines.append(f"- until: `{until}`")
     lines.append("- mode: `dry_run / readonly`")
     lines.append("- 写入主脑: 否")
     lines.append("- 调用 DeepSeek: 否，当前为本地 mock 草稿")
@@ -210,7 +226,9 @@ def render_markdown(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=os.environ.get("OMBRE_BUCKETS_DIR", "buckets"))
-    parser.add_argument("--date", default=today_str())
+    parser.add_argument("--date", default=today_str(), help="Single date, kept for compatibility.")
+    parser.add_argument("--since", default="", help="Start date YYYY-MM-DD. Overrides --date when provided.")
+    parser.add_argument("--until", default="", help="End date YYYY-MM-DD. Overrides --date when provided.")
     parser.add_argument("--out-dir", default="_nightly_logs")
     args = parser.parse_args()
 
@@ -218,14 +236,21 @@ def main() -> None:
     out_dir = Path(args.out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    since = args.since or args.date
+    until = args.until or args.date
+    if since > until:
+        raise SystemExit(f"Invalid date range: since {since} > until {until}")
+
     run_id = uuid.uuid4().hex[:12]
-    buckets = load_buckets(root, args.date)
-    notes = load_notes(root, args.date)
+    buckets = load_buckets(root, since, until)
+    notes = load_notes(root, since, until)
 
     md = render_markdown(
         run_id=run_id,
         root=root,
         target_date=args.date,
+        since=since,
+        until=until,
         buckets=buckets,
         notes=notes,
     )
@@ -235,6 +260,8 @@ def main() -> None:
 
     print(f"nightly_job v0.1 readonly OK")
     print(f"date: {args.date}")
+    print(f"since: {since}")
+    print(f"until: {until}")
     print(f"buckets: {len(buckets)}")
     print(f"notes: {len(notes)}")
     print(f"output: {out_path}")
