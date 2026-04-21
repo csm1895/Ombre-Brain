@@ -140,6 +140,31 @@ def load_notes(root: Path, since: str, until: str) -> list[dict[str, Any]]:
     return notes
 
 
+def count_by_importance(buckets: list[dict[str, Any]]) -> dict[str, int]:
+    """Group buckets by importance score."""
+    counts = {
+        "high_8_10": 0,
+        "medium_5_7": 0,
+        "low_0_4": 0,
+        "unknown": 0,
+    }
+    for b in buckets:
+        try:
+            value = int(float(str(b.get("importance", "")).strip()))
+        except Exception:
+            counts["unknown"] += 1
+            continue
+
+        if value >= 8:
+            counts["high_8_10"] += 1
+        elif value >= 5:
+            counts["medium_5_7"] += 1
+        else:
+            counts["low_0_4"] += 1
+
+    return {k: v for k, v in counts.items() if v}
+
+
 def count_by_type(buckets: list[dict[str, Any]]) -> dict[str, int]:
     """Count buckets by their metadata type."""
     counts: dict[str, int] = {}
@@ -178,6 +203,7 @@ def render_json_summary(
             "buckets": len(buckets),
             "notes": len(notes),
             "buckets_by_type": count_by_type(buckets),
+            "buckets_by_importance": count_by_importance(buckets),
         },
         "bucket_ids": [str(b.get("id", "")) for b in buckets],
         "note_ids": [str(n.get("id", "")) for n in notes],
@@ -196,6 +222,10 @@ def render_note_preview(target_date: str, since: str, until: str, buckets: list[
     if type_counts:
         type_text = "，".join(f"{k}:{v}" for k, v in type_counts.items())
         lines.append(f"类型：{type_text}")
+    importance_counts = count_by_importance(buckets)
+    if importance_counts:
+        importance_text = "，".join(f"{k}:{v}" for k, v in importance_counts.items())
+        lines.append(f"重要度：{importance_text}")
     lines.append("")
     lines.append("今日小传草稿：")
     if not buckets and not notes:
@@ -272,6 +302,11 @@ def render_markdown(
         lines.append("- 记忆桶类型统计：")
         for t, c in type_counts.items():
             lines.append(f"  - {t}: {c}")
+    importance_counts = count_by_importance(buckets)
+    if importance_counts:
+        lines.append("- 重要度统计：")
+        for k, c in importance_counts.items():
+            lines.append(f"  - {k}: {c}")
     lines.append("")
 
     lines.append("## 二、今日小传草稿")
