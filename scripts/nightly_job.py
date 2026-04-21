@@ -140,6 +140,19 @@ def load_notes(root: Path, since: str, until: str) -> list[dict[str, Any]]:
     return notes
 
 
+def high_importance_buckets(buckets: list[dict[str, Any]], threshold: int = 8) -> list[dict[str, Any]]:
+    """Return buckets with importance >= threshold."""
+    result: list[dict[str, Any]] = []
+    for b in buckets:
+        try:
+            value = int(float(str(b.get("importance", "")).strip()))
+        except Exception:
+            continue
+        if value >= threshold:
+            result.append(b)
+    return result
+
+
 def count_by_importance(buckets: list[dict[str, Any]]) -> dict[str, int]:
     """Group buckets by importance score."""
     counts = {
@@ -206,6 +219,7 @@ def render_json_summary(
             "buckets_by_importance": count_by_importance(buckets),
         },
         "bucket_ids": [str(b.get("id", "")) for b in buckets],
+        "high_importance_bucket_ids": [str(b.get("id", "")) for b in high_importance_buckets(buckets)],
         "note_ids": [str(n.get("id", "")) for n in notes],
         "markdown_output": str(out_path),
     }
@@ -233,9 +247,10 @@ def render_note_preview(target_date: str, since: str, until: str, buckets: list[
     else:
         lines.append("今天读取到新的本地材料，已生成只读草稿，等待人工确认。")
     lines.append("")
+    high_items = high_importance_buckets(buckets)
     lines.append("需要确认：")
     lines.append("- 是否需要接 DeepSeek 生成更自然的小传")
-    lines.append("- 是否有内容值得写入长期记忆")
+    lines.append(f"- 是否有高重要度内容值得写入长期记忆：{len(high_items)} 条候选")
     lines.append("- 是否有未完成事项需要更新")
     lines.append("")
     lines.append(f"草稿文件：{out_path}")
@@ -350,7 +365,14 @@ def render_markdown(
 
     lines.append("## 六、长期记忆候选")
     lines.append("")
-    lines.append("v0.1 暂未自动判断。后续只列候选，等待倩倩或叶辰一确认。")
+    lines.append("v0.1 暂未自动判断。以下仅列出高重要度候选，等待倩倩或叶辰一确认。")
+    lines.append("")
+    high_items = high_importance_buckets(buckets)
+    if not high_items:
+        lines.append("无。")
+    else:
+        for b in high_items:
+            lines.append(f"- `{b.get('id')}` {b.get('name') or ''} | type={b.get('type')} | importance={b.get('importance')}")
     lines.append("")
 
     lines.append("## 七、需要人工确认")
