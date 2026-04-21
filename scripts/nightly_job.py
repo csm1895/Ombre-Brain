@@ -161,6 +161,7 @@ def render_json_summary(
         "until": until,
         "root": str(root),
         "mode": "dry_run/readonly",
+        "dry_run": True,
         "writes_main_brain": False,
         "calls_deepseek": False,
         "calls_hold_grow_trace": False,
@@ -243,6 +244,7 @@ def render_markdown(
     lines.append(f"- since: `{since}`")
     lines.append(f"- until: `{until}`")
     lines.append("- mode: `dry_run / readonly`")
+    lines.append("- dry_run: `true`")
     lines.append("- 写入主脑: 否")
     lines.append("- 调用 DeepSeek: 否，当前为本地 mock 草稿")
     lines.append("")
@@ -317,6 +319,8 @@ def main() -> None:
     parser.add_argument("--note-preview", action="store_true", help="Also write a note-style preview file. Does not send.")
     parser.add_argument("--max-preview-chars", type=int, default=2500, help="Max chars for note preview. <=0 means no limit.")
     parser.add_argument("--json-summary", action="store_true", help="Also write a machine-readable JSON summary.")
+    parser.add_argument("--dry-run", dest="dry_run", action="store_true", default=True, help="Readonly mode. Default: true.")
+    parser.add_argument("--no-dry-run", dest="dry_run", action="store_false", help="Reserved for future. Currently rejected.")
     args = parser.parse_args()
 
     root = Path(args.root).expanduser().resolve()
@@ -328,6 +332,9 @@ def main() -> None:
     run_id = uuid.uuid4().hex[:12]
 
     try:
+        if not args.dry_run:
+            raise ValueError("--no-dry-run is not supported in v0.1. This version is readonly only.")
+
         if since > until:
             raise ValueError(f"Invalid date range: since {since} > until {until}")
 
