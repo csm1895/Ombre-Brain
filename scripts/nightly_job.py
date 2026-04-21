@@ -140,6 +140,15 @@ def load_notes(root: Path, since: str, until: str) -> list[dict[str, Any]]:
     return notes
 
 
+def count_by_type(buckets: list[dict[str, Any]]) -> dict[str, int]:
+    """Count buckets by their metadata type."""
+    counts: dict[str, int] = {}
+    for b in buckets:
+        t = str(b.get("type") or "unknown").strip() or "unknown"
+        counts[t] = counts.get(t, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def render_json_summary(
     *,
     run_id: str,
@@ -168,6 +177,7 @@ def render_json_summary(
         "counts": {
             "buckets": len(buckets),
             "notes": len(notes),
+            "buckets_by_type": count_by_type(buckets),
         },
         "bucket_ids": [str(b.get("id", "")) for b in buckets],
         "note_ids": [str(n.get("id", "")) for n in notes],
@@ -182,6 +192,10 @@ def render_note_preview(target_date: str, since: str, until: str, buckets: list[
     lines.append("")
     lines.append(f"范围：{since} 至 {until}")
     lines.append(f"读取：记忆桶 {len(buckets)} 条，便利贴 {len(notes)} 条")
+    type_counts = count_by_type(buckets)
+    if type_counts:
+        type_text = "，".join(f"{k}:{v}" for k, v in type_counts.items())
+        lines.append(f"类型：{type_text}")
     lines.append("")
     lines.append("今日小传草稿：")
     if not buckets and not notes:
@@ -253,6 +267,11 @@ def render_markdown(
     lines.append("")
     lines.append(f"- 当天新增/活跃记忆桶：{len(buckets)}")
     lines.append(f"- 当天便利贴：{len(notes)}")
+    type_counts = count_by_type(buckets)
+    if type_counts:
+        lines.append("- 记忆桶类型统计：")
+        for t, c in type_counts.items():
+            lines.append(f"  - {t}: {c}")
     lines.append("")
 
     lines.append("## 二、今日小传草稿")
