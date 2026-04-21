@@ -140,6 +140,31 @@ def load_notes(root: Path, since: str, until: str) -> list[dict[str, Any]]:
     return notes
 
 
+def render_note_preview(target_date: str, since: str, until: str, buckets: list[dict[str, Any]], notes: list[dict[str, Any]], out_path: Path) -> str:
+    """Render a short note-style preview. This does not send anything."""
+    lines: list[str] = []
+    lines.append(f"【nightly_job v0.1 只读草稿｜{target_date}】")
+    lines.append("")
+    lines.append(f"范围：{since} 至 {until}")
+    lines.append(f"读取：记忆桶 {len(buckets)} 条，便利贴 {len(notes)} 条")
+    lines.append("")
+    lines.append("今日小传草稿：")
+    if not buckets and not notes:
+        lines.append("今天没有读取到新的本地记忆碎片。")
+    else:
+        lines.append("今天读取到新的本地材料，已生成只读草稿，等待人工确认。")
+    lines.append("")
+    lines.append("需要确认：")
+    lines.append("- 是否需要接 DeepSeek 生成更自然的小传")
+    lines.append("- 是否有内容值得写入长期记忆")
+    lines.append("- 是否有未完成事项需要更新")
+    lines.append("")
+    lines.append(f"草稿文件：{out_path}")
+    lines.append("")
+    lines.append("以上为只读草稿，未写入主脑，未发送便利贴。")
+    return "\n".join(lines)
+
+
 def write_error_log(out_dir: Path, run_id: str, err: BaseException) -> Path:
     """Write failure details to _nightly_logs/errors."""
     err_dir = out_dir / "errors"
@@ -252,6 +277,7 @@ def main() -> None:
     parser.add_argument("--since", default="", help="Start date YYYY-MM-DD. Overrides --date when provided.")
     parser.add_argument("--until", default="", help="End date YYYY-MM-DD. Overrides --date when provided.")
     parser.add_argument("--out-dir", default="_nightly_logs")
+    parser.add_argument("--note-preview", action="store_true", help="Also write a note-style preview file. Does not send.")
     args = parser.parse_args()
 
     root = Path(args.root).expanduser().resolve()
@@ -282,6 +308,12 @@ def main() -> None:
         out_path = out_dir / f"nightly_{args.date}_{run_id}.md"
         out_path.write_text(md, encoding="utf-8")
 
+        note_path = None
+        if args.note_preview:
+            note_text = render_note_preview(args.date, since, until, buckets, notes, out_path)
+            note_path = out_dir / f"nightly_note_preview_{args.date}_{run_id}.txt"
+            note_path.write_text(note_text, encoding="utf-8")
+
         print(f"nightly_job v0.1 readonly OK")
         print(f"date: {args.date}")
         print(f"since: {since}")
@@ -289,6 +321,8 @@ def main() -> None:
         print(f"buckets: {len(buckets)}")
         print(f"notes: {len(notes)}")
         print(f"output: {out_path}")
+        if note_path:
+            print(f"note_preview: {note_path}")
     except Exception as err:
         err_path = write_error_log(out_dir, run_id, err)
         print("nightly_job v0.1 readonly FAILED")
