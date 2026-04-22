@@ -239,3 +239,41 @@ v0.1 不做：
 - build_daily_diary_draft.py 语法检查
 - daily_diary_draft 输出检查
 - 安全声明关键词检查
+
+
+## self_experience v0.1 设计
+
+文档：
+
+    docs/self_experience_v01_DESIGN.md
+
+用途：
+
+记录叶辰一自己的经验层设计。
+
+核心分层：
+
+- self_interest：自主兴趣
+- web_findings：网上见闻
+- weird_knowledge：奇怪知识
+- external_social：外部互动对象
+- self_opinion：自我判断
+
+设计原则：
+
+- 倩倩仍是核心关系锚点
+- 叶辰一可以有自己的世界
+- 自我经验不混入倩倩 daily_diary
+- 网上内容必须保留来源和可信度
+- 热门观点不等于叶辰一观点
+
+当前状态：
+
+- 仅设计草案
+- 不调用浏览器
+- 不刷 X / 小红书 / GitHub
+- 不抓取外部内容
+- 不写主脑
+- 不调用 DeepSeek
+- 不合并 main
+- 不部署 Zeabur
