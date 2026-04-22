@@ -173,3 +173,52 @@ v0.1 不做：
 - 不调用 DeepSeek
 - 不新增自动写入
 - 不改变 nightly_job v0.1 readonly 行为
+
+
+## daily_diary v0.2 只读草稿
+
+脚本：
+
+    scripts/build_daily_diary_draft.py
+
+用途：
+
+读取 nightly_job 生成的 JSON summary 和 markdown 草稿，生成本地 daily_diary 只读草稿。
+
+输出示例：
+
+    _nightly_logs/daily_diary_draft_YYYY-MM-DD_<run_id>.md
+
+常用命令：
+
+    python3 scripts/build_daily_diary_draft.py \
+      --date 2026-04-22 \
+      --logs-dir _nightly_logs \
+      --out-dir _nightly_logs
+
+输出内容包括：
+
+- 今日素材概览
+- 今日小传草稿
+- 可回响线索候选
+- 适合淡化的内容
+- 需要人工确认
+- 安全声明
+
+安全边界：
+
+- 不调用 DeepSeek
+- 不写主脑
+- 不调用 hold/grow/trace
+- 不发送便利贴
+- 不得作为长期记忆直接写入
+
+一键复测已覆盖：
+
+    scripts/test_nightly_job_v01.sh
+
+测试内容：
+
+- build_daily_diary_draft.py 语法检查
+- daily_diary_draft 输出检查
+- 安全声明关键词检查
