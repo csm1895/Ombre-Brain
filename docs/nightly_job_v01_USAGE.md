@@ -191,10 +191,27 @@ v0.1 不做：
 
 常用命令：
 
+单日模式：
+
     python3 scripts/build_daily_diary_draft.py \
       --date 2026-04-22 \
       --logs-dir _nightly_logs \
       --out-dir _nightly_logs
+
+范围模式：
+
+    python3 scripts/build_daily_diary_draft.py \
+      --since 2026-04-20 \
+      --until 2026-04-22 \
+      --logs-dir _nightly_logs \
+      --out-dir _nightly_logs
+
+参数规则：
+
+- `--date` 用于单日草稿
+- `--since` / `--until` 用于 1～3 天范围草稿
+- `--date` 不能和 `--since` / `--until` 混用
+- `--since` 不能晚于 `--until`
 
 输出内容包括：
 
