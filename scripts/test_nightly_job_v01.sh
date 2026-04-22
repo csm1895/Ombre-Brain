@@ -139,4 +139,43 @@ grep -q "未发送便利贴" "$DIARY_DRAFT"
 echo "daily diary draft OK: $DIARY_DRAFT"
 
 echo ""
+echo "=== 9. build daily diary readonly draft by date range ==="
+python3 scripts/build_daily_diary_draft.py \
+  --since "$SINCE" \
+  --until "$UNTIL" \
+  --logs-dir "$OUT_DIR" \
+  --out-dir "$OUT_DIR"
+
+DIARY_RANGE_DRAFT="$(ls -t "$OUT_DIR"/daily_diary_draft_"${SINCE}"_to_"${UNTIL}"_*.md | head -1)"
+test -f "$DIARY_RANGE_DRAFT"
+
+grep -q "daily_diary v0.2 只读草稿" "$DIARY_RANGE_DRAFT"
+grep -q "$SINCE"_to_"$UNTIL" "$DIARY_RANGE_DRAFT"
+grep -q "未写入主脑" "$DIARY_RANGE_DRAFT"
+grep -q "未调用 DeepSeek" "$DIARY_RANGE_DRAFT"
+grep -q "未发送便利贴" "$DIARY_RANGE_DRAFT"
+
+echo "daily diary range draft OK: $DIARY_RANGE_DRAFT"
+
+echo ""
+echo "=== 10. verify invalid daily diary date range is rejected ==="
+set +e
+python3 scripts/build_daily_diary_draft.py \
+  --since "$UNTIL" \
+  --until "$SINCE" \
+  --logs-dir "$OUT_DIR" \
+  --out-dir "$OUT_DIR" >/tmp/daily_diary_invalid_range.out 2>&1
+INVALID_STATUS=$?
+set -e
+
+if [ "$INVALID_STATUS" -eq 0 ]; then
+  echo "ERROR: invalid daily diary date range should fail"
+  cat /tmp/daily_diary_invalid_range.out
+  exit 1
+fi
+
+grep -q "Invalid date range" /tmp/daily_diary_invalid_range.out
+echo "invalid daily diary range rejected OK"
+
+echo ""
 echo "=== nightly_job v0.1 test PASSED ==="
