@@ -120,4 +120,23 @@ grep -q "Markdown 草稿" "$PROMPT_INPUT"
 echo "prompt input OK: $PROMPT_INPUT"
 
 echo ""
+echo "=== 8. build daily diary readonly draft ==="
+python3 -m py_compile scripts/build_daily_diary_draft.py
+
+python3 scripts/build_daily_diary_draft.py \
+  --date "$(date +%F)" \
+  --logs-dir "$OUT_DIR" \
+  --out-dir "$OUT_DIR"
+
+DIARY_DRAFT="$(ls -t "$OUT_DIR"/daily_diary_draft_*.md | head -1)"
+test -f "$DIARY_DRAFT"
+
+grep -q "daily_diary v0.2 只读草稿" "$DIARY_DRAFT"
+grep -q "未写入主脑" "$DIARY_DRAFT"
+grep -q "未调用 DeepSeek" "$DIARY_DRAFT"
+grep -q "未发送便利贴" "$DIARY_DRAFT"
+
+echo "daily diary draft OK: $DIARY_DRAFT"
+
+echo ""
 echo "=== nightly_job v0.1 test PASSED ==="
