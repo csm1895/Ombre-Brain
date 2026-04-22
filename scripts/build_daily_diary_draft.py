@@ -33,6 +33,23 @@ def find_latest_summary(logs_dir: Path, date: str) -> Path:
     return files[-1]
 
 
+def find_latest_summary_by_range(logs_dir: Path, since: str, until: str) -> Path:
+    files = sorted(
+        logs_dir.glob(f"nightly_summary_{until}_*.json"),
+        key=lambda p: p.stat().st_mtime,
+    )
+    for path in reversed(files):
+        try:
+            data = load_json(path)
+        except Exception:
+            continue
+        if str(data.get("since", "")) == since and str(data.get("until", "")) == until:
+            return path
+    if files:
+        return files[-1]
+    raise FileNotFoundError(f"No nightly summary found for range {since} -> {until} in {logs_dir}")
+
+
 def resolve_markdown(summary: dict[str, Any], logs_dir: Path, date: str) -> Path:
     md = summary.get("markdown_output")
     if md:
@@ -56,7 +73,7 @@ def get_counts(summary: dict[str, Any]) -> dict[str, Any]:
 
 def render_diary_draft(
     *,
-    date: str,
+    date_label: str,
     run_id: str,
     summary: dict[str, Any],
     markdown_path: Path,
@@ -70,7 +87,7 @@ def render_diary_draft(
 
     lines: list[str] = []
 
-    lines.append(f"# daily_diary v0.2 只读草稿｜{date}")
+    lines.append(f"# daily_diary v0.2 只读草稿｜{date_label}")
     lines.append("")
     lines.append(f"- run_id: `{run_id}`")
     lines.append(f"- 来源草稿: `{markdown_path}`")
@@ -161,7 +178,9 @@ def render_diary_draft(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--date", required=True, help="Target date YYYY-MM-DD")
+    parser.add_argument("--date", default="", help="Target date YYYY-MM-DD")
+    parser.add_argument("--since", default="", help="Range start date YYYY-MM-DD")
+    parser.add_argument("--until", default="", help="Range end date YYYY-MM-DD")
     parser.add_argument("--logs-dir", default="_nightly_logs")
     parser.add_argument("--summary", default="", help="Optional explicit nightly_summary json path")
     parser.add_argument("--out-dir", default="_nightly_logs")
@@ -171,28 +190,42 @@ def main() -> None:
     out_dir = Path(args.out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    summary_path = (
-        Path(args.summary).expanduser().resolve()
-        if args.summary
-        else find_latest_summary(logs_dir, args.date)
-    )
+    if args.date and (args.since or args.until):
+        raise ValueError("Use either --date or --since/--until, not both.")
+
+    if not args.date and not (args.since and args.until):
+        raise ValueError("Provide --date or both --since and --until.")
+
+    if args.since and args.until and args.since > args.until:
+        raise ValueError(f"Invalid date range: since {args.since} > until {args.until}")
+
+    if args.summary:
+        summary_path = Path(args.summary).expanduser().resolve()
+    elif args.date:
+        summary_path = find_latest_summary(logs_dir, args.date)
+    else:
+        summary_path = find_latest_summary_by_range(logs_dir, args.since, args.until)
+
     summary = load_json(summary_path)
-    markdown_path = resolve_markdown(summary, logs_dir, args.date)
+
+    date_label = args.date or f"{args.since}_to_{args.until}"
+    markdown_lookup_date = args.date or args.until
+    markdown_path = resolve_markdown(summary, logs_dir, markdown_lookup_date)
 
     run_id = str(summary.get("run_id") or summary_path.stem.split("_")[-1])
 
     output = render_diary_draft(
-        date=args.date,
+        date_label=date_label,
         run_id=run_id,
         summary=summary,
         markdown_path=markdown_path,
     )
 
-    out_path = out_dir / f"daily_diary_draft_{args.date}_{run_id}.md"
+    out_path = out_dir / f"daily_diary_draft_{date_label}_{run_id}.md"
     out_path.write_text(output, encoding="utf-8")
 
     print("daily diary draft build OK")
-    print(f"date: {args.date}")
+    print(f"date: {date_label}")
     print(f"summary: {summary_path}")
     print(f"markdown: {markdown_path}")
     print(f"output: {out_path}")
