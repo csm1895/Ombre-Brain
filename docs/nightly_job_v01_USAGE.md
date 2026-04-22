@@ -146,3 +146,30 @@ v0.1 不做：
 通过标志：
 
     nightly_job v0.1 test PASSED
+
+
+## diary_decay v0.1 设计
+
+文档：
+
+    docs/diary_decay_v01_DESIGN.md
+
+用途：
+
+记录“日记 + 遗忘 + 场景回响”机制设计。
+
+核心分层：
+
+- daily_diary：1～3 天日记 / 小传草稿
+- monthly_digest：月度消化，长期压缩保存
+- echo_index：地点 / 事件 / 物件 / 情绪等回响索引
+- long_memory_candidate：长期记忆候选，需人工确认
+- expired_daily：已淡化日记，默认不主动检索
+
+当前状态：
+
+- 仅设计草案
+- 不写主脑
+- 不调用 DeepSeek
+- 不新增自动写入
+- 不改变 nightly_job v0.1 readonly 行为
