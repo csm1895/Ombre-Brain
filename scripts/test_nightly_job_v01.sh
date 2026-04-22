@@ -100,4 +100,24 @@ grep -q -- "--no-dry-run is not supported" "$ERR"
 echo "error log OK: $ERR"
 
 echo ""
+echo "=== 7. build DeepSeek prompt input package ==="
+python3 -m py_compile scripts/build_nightly_prompt_input.py
+
+python3 scripts/build_nightly_prompt_input.py \
+  --date "$(date +%F)" \
+  --logs-dir "$OUT_DIR" \
+  --prompt prompts/nightly_job_deepseek_v01.md \
+  --out-dir "$OUT_DIR"
+
+PROMPT_INPUT="$(ls -t "$OUT_DIR"/nightly_prompt_input_*.md | head -1)"
+test -f "$PROMPT_INPUT"
+
+grep -q "未调用 DeepSeek" "$PROMPT_INPUT"
+grep -q "未写入主脑" "$PROMPT_INPUT"
+grep -q "JSON Summary" "$PROMPT_INPUT"
+grep -q "Markdown 草稿" "$PROMPT_INPUT"
+
+echo "prompt input OK: $PROMPT_INPUT"
+
+echo ""
 echo "=== nightly_job v0.1 test PASSED ==="
