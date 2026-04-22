@@ -277,3 +277,41 @@ v0.1 不做：
 - 不调用 DeepSeek
 - 不合并 main
 - 不部署 Zeabur
+
+
+## monthly_digest v0.1 设计
+
+文档：
+
+    docs/monthly_digest_v01_DESIGN.md
+
+用途：
+
+把 30～45 天 daily_diary 日常流水压缩成月度消化层。
+
+核心作用：
+
+- 淡化普通流水
+- 保留连续事件
+- 提取关系 / 生活 / 项目变化
+- 生成 echo_index 回响候选
+- 生成 long_memory_candidate 长期记忆候选
+- 汇总未完成事项变化
+- 给下月继续观察点
+
+与其他层关系：
+
+- daily_diary 是原料
+- monthly_digest 是消化
+- echo_index 负责未来场景触发回响
+- long_memory_candidate 仍需人工确认，不自动写主脑
+
+当前状态：
+
+- 仅设计草案
+- 不自动读取所有日记
+- 不调用 DeepSeek
+- 不写主脑
+- 不调用 hold/grow/trace
+- 不合并 main
+- 不部署 Zeabur
