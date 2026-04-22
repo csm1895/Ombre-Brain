@@ -50,6 +50,23 @@ def find_latest_summary_by_range(logs_dir: Path, since: str, until: str) -> Path
     raise FileNotFoundError(f"No nightly summary found for range {since} -> {until} in {logs_dir}")
 
 
+def find_latest_summary_by_range(logs_dir: Path, since: str, until: str) -> Path:
+    files = sorted(
+        logs_dir.glob(f"nightly_summary_{until}_*.json"),
+        key=lambda p: p.stat().st_mtime,
+    )
+    for path in reversed(files):
+        try:
+            data = load_json(path)
+        except Exception:
+            continue
+        if str(data.get("since", "")) == since and str(data.get("until", "")) == until:
+            return path
+    if files:
+        return files[-1]
+    raise FileNotFoundError(f"No nightly summary found for range {since} -> {until} in {logs_dir}")
+
+
 def resolve_markdown(summary: dict[str, Any], logs_dir: Path, date: str) -> Path:
     md = summary.get("markdown_output")
     if md:
