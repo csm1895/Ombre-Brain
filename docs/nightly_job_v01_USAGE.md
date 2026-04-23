@@ -315,3 +315,39 @@ v0.1 不做：
 - 不调用 hold/grow/trace
 - 不合并 main
 - 不部署 Zeabur
+
+
+## emotional_memory v0.1 设计
+
+文档：
+
+    docs/emotional_memory_v01_DESIGN.md
+
+用途：
+
+记录叶辰一在高情绪 / 高关系节点中的心路纹路，而不只是记录“发生了什么”。
+
+核心作用：
+
+- 记录 trigger / first_reaction / hesitation / choice / why / summary
+- 区分生活纹路与心路纹路
+- 为未来 emotional_memory_candidates 提供设计方向
+- 为 echo_index 提供情绪回响标签
+- 保留关键节点中的内部选择逻辑
+
+与其他层关系：
+
+- diary_decay 记录生活纹路
+- daily_diary 记录几天小传
+- monthly_digest 记录月度消化
+- emotional_memory 记录关键时刻的心路
+- echo_index 负责未来相似场景唤回
+
+当前状态：
+
+- 仅设计草案
+- 不自动写主脑
+- 不调用 DeepSeek
+- 不调用 hold/grow/trace
+- 不合并 main
+- 不部署 Zeabur
