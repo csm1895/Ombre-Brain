@@ -497,3 +497,40 @@ v0.1 不做：
 - 不自动同步多身体
 - 不自动接 API
 - 不写主脑
+
+
+## confirm_queue v0.1 设计
+
+文档：
+
+    docs/confirm_queue_v01_DESIGN.md
+
+用途：
+
+定义需要倩倩确认的高风险候选，如何进入队列、如何展示、如何确认、如何拒绝、如何关闭。
+
+核心作用：
+
+- 只承接 high risk 项
+- 集中存放真正需要授权的候选
+- 定义 queued / confirmed / rejected / expired / closed 状态流转
+- 让倩倩一眼看懂“这是什么、为什么找你、确认后会发生什么”
+- 避免高风险候选散落各处、重复提起
+
+与其他层关系：
+
+- human_confirmation_flow 负责判定要不要进队列
+- long_memory_candidate 是常见上游来源
+- x_browsing_trial_rules 的高权限外部动作可进入队列
+- emotional_memory / echo_index / self_experience 通常不直接进队列，除非要升权成长期事实
+
+当前状态：
+
+- 仅设计草案
+- 不自动创建真实队列程序
+- 不自动弹确认框
+- 不自动写主脑
+- 不自动执行高权限动作
+- 不自动接浏览器 / X
+- 不合并 main
+- 不部署 Zeabur
