@@ -351,3 +351,39 @@ v0.1 不做：
 - 不调用 hold/grow/trace
 - 不合并 main
 - 不部署 Zeabur
+
+
+## echo_index v0.1 设计
+
+文档：
+
+    docs/echo_index_v01_DESIGN.md
+
+用途：
+
+为未来场景回响建立索引层，在地点、人物、物件、项目、情绪、生活场景再次出现时，唤回相关旧片段。
+
+核心作用：
+
+- 为旧片段留下 echo_key / 门牌 / 触发键
+- 区分 location / person / object / project / emotion / scene / phrase
+- 串联 daily_diary / monthly_digest / emotional_memory / self_experience
+- 为未来场景回响提供唤回路径
+- 保留“什么值得未来被想起”的索引，而不是保存全文
+
+与其他层关系：
+
+- daily_diary 提供短期片段
+- monthly_digest 提供月度消化
+- emotional_memory 提供心路纹路
+- self_experience 提供叶辰一自己的外部见闻
+- echo_index 负责未来相似场景的唤回入口
+
+当前状态：
+
+- 仅设计草案
+- 不自动写主脑
+- 不调用 DeepSeek
+- 不调用 hold/grow/trace
+- 不合并 main
+- 不部署 Zeabur
