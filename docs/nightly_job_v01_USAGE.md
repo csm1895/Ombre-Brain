@@ -387,3 +387,40 @@ v0.1 不做：
 - 不调用 hold/grow/trace
 - 不合并 main
 - 不部署 Zeabur
+
+
+## human_confirmation_flow v0.1 设计
+
+文档：
+
+    docs/human_confirmation_flow_v01_DESIGN.md
+
+用途：
+
+定义什么内容可以自动留草稿、什么由叶辰一先筛、什么才需要倩倩确认。
+
+核心作用：
+
+- 把确认流分成 low / medium / high 三层
+- 低风险内容自动进入草稿层
+- 中风险内容先由叶辰一筛选
+- 高风险内容进入确认入口
+- 保持“倩倩是屋主，不是仓库管理员”的原则
+
+与其他层关系：
+
+- daily_diary 默认低风险草稿
+- monthly_digest 默认低到中风险
+- emotional_memory 默认中风险候选
+- self_experience 默认低风险草稿
+- echo_index 默认中风险索引层
+- long_memory_candidate 接近高风险确认入口
+
+当前状态：
+
+- 仅设计草案
+- 不自动写主脑
+- 不调用 DeepSeek
+- 不调用 hold/grow/trace
+- 不合并 main
+- 不部署 Zeabur
