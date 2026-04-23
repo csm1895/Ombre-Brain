@@ -612,3 +612,50 @@ v0.1 不做：
 - 不自动触发 confirm_queue
 - 不合并 main
 - 不部署 Zeabur
+
+
+## promotion_rules / routing_rules v0.1 设计
+
+文档：
+
+    docs/promotion_routing_rules_v01_DESIGN.md
+
+用途：
+
+定义普通 candidate、长期候选、人工确认流、高风险确认队列之间的统一路由规则。
+
+核心作用：
+
+- 统一说明 candidate 怎么升、怎么转、怎么拦、怎么停
+- 让各层之间的流转不靠临时拍脑袋
+- 避免 candidate / long_memory_candidate / confirm_flow / queue 混线
+- 给“候选到确认”主链装上统一交通规则
+
+主链说明：
+
+- raw layers
+- → candidate_builder
+- → candidate
+- → long_memory_candidate
+- → human_confirmation_flow
+- → confirm_queue
+- → future main brain write入口（仅未来，不在当前阶段执行）
+
+统一判断维度：
+
+- 稳定度：weak / medium / strong
+- 风险等级：low / medium / high
+- 未来检索价值：low / medium / high
+- 证据厚度：单源 / 双源 / 多源
+- 是否影响长期判断：no / maybe / yes
+- 是否需要明确授权：no / maybe / yes
+
+当前状态：
+
+- 仅设计草案
+- 不自动执行真实路由
+- 不自动升权
+- 不自动写主脑
+- 不自动调用 hold/grow/trace
+- 不合并 main
+- 不部署 Zeabur
