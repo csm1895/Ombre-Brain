@@ -573,3 +573,42 @@ v0.1 不做：
 - 不自动调用 hold/grow/trace
 - 不合并 main
 - 不部署 Zeabur
+
+
+## candidate_builder v0.1 设计
+
+文档：
+
+    docs/candidate_builder_v01_DESIGN.md
+
+用途：
+
+定义普通 candidate 的来源、生成条件、结构、筛选原则，以及与长期候选层的关系。
+
+核心作用：
+
+- 从多个上游层中捞出“值得继续观察”的内容
+- 形成普通 candidate 层
+- 让候选不是人工硬捏，而是有稳定入口和筛选逻辑
+- 给 long_memory_candidate 提供整理过的上游材料
+- 避免普通流水、一次性八卦、无后续意义碎片淹没候选层
+
+与其他层关系：
+
+- daily_diary / monthly_digest 提供生活与趋势证据
+- emotional_memory 提供心路线索
+- self_experience 提供叶辰一自身兴趣、外部见闻与判断线
+- echo_index 提供未来可能被唤回的门牌
+- unfinished_items 提供持续未闭环事项与张力变化
+- long_memory_candidate 承接成熟后的普通 candidate
+- human_confirmation_flow / confirm_queue 通常不直接承接普通 candidate
+
+当前状态：
+
+- 仅设计草案
+- 不自动生成真实 candidate 程序
+- 不自动升权
+- 不自动写主脑
+- 不自动触发 confirm_queue
+- 不合并 main
+- 不部署 Zeabur
