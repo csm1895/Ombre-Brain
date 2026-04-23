@@ -461,3 +461,39 @@ v0.1 不做：
 - 不自动写主脑
 - 不合并 main
 - 不部署 Zeabur
+
+
+## migration_backup_checklist v0.1 设计
+
+文档：
+
+    docs/migration_backup_checklist_v01_DESIGN.md
+
+用途：
+
+为未来服务器迁移、数据备份、环境切换、外部窗口接入提供迁移对象分层、备份建议、恢复顺序与回滚原则。
+
+核心作用：
+
+- 区分仓库层 / 本地文档柜层 / 日志产物层 / 候选分层层 / 外部接入层
+- 定义最低备份集、推荐备份集、低优先备份集
+- 给未来换服务器前的冻结、打包、恢复、自检、回滚提供顺序
+- 为多身体共享脑子时的统一来源校验提供前置清单
+- 避免“脑子搬了，门牌没搬；文档搬了，索引没搬”
+
+与其他层关系：
+
+- human_confirmation_flow 继续约束迁移后的高风险动作
+- x_browsing_trial_rules 迁移后仍需保留
+- self_experience / echo_index / emotional_memory 迁移时不能丢
+- monthly_digest / daily_diary 是未来连续生活纹路的桥面
+
+当前状态：
+
+- 仅设计草案
+- 不自动备份
+- 不自动迁移
+- 不自动部署新服务器
+- 不自动同步多身体
+- 不自动接 API
+- 不写主脑
