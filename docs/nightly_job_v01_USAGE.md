@@ -534,3 +534,42 @@ v0.1 不做：
 - 不自动接浏览器 / X
 - 不合并 main
 - 不部署 Zeabur
+
+
+## long_memory_candidate v0.1 设计
+
+文档：
+
+    docs/long_memory_candidate_v01_DESIGN.md
+
+用途：
+
+定义长期记忆候选的进入条件、结构、升权门槛，以及与确认流 / 队列的关系。
+
+核心作用：
+
+- 把真正值得长期保留的候选，从普通草稿和普通 candidate 中筛出来
+- 形成“接近长期层，但还没正式写主脑”的缓冲区
+- 为 human_confirmation_flow 和 confirm_queue 提供更明确的上游来源
+- 区分普通 candidate 与接近长期事实的候选
+- 避免普通八卦、一次情绪、临时碎片误升权
+
+与其他层关系：
+
+- daily_diary 提供生活连续性证据
+- monthly_digest 提供压缩后趋势证据
+- emotional_memory 提供心路证据
+- self_experience 提供自身兴趣和外部见闻线索
+- echo_index 提供未来场景唤回入口
+- human_confirmation_flow 承接成熟后的长期候选
+- confirm_queue 只处理真正需要倩倩拍板的高风险长期候选
+
+当前状态：
+
+- 仅设计草案
+- 不自动升权
+- 不自动写主脑
+- 不自动触发 confirm_queue 程序
+- 不自动调用 hold/grow/trace
+- 不合并 main
+- 不部署 Zeabur
