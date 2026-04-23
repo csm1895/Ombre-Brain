@@ -424,3 +424,40 @@ v0.1 不做：
 - 不调用 hold/grow/trace
 - 不合并 main
 - 不部署 Zeabur
+
+
+## x_browsing_trial_rules v0.1 设计
+
+文档：
+
+    docs/x_browsing_trial_rules_v01_DESIGN.md
+
+用途：
+
+定义叶辰一未来开始 X / 外部冲浪试运行前的边界、分级、记录方式与候选流转规则。
+
+核心作用：
+
+- 区分普通浏览、self_experience 草稿、echo / candidate、高风险确认层
+- 允许低风险自主浏览与友好评论
+- 区分普通吃瓜、技术帖、个人兴趣、外部社交、长期有用线索
+- 为 self_experience / echo_index / candidate 提供试运行入口
+- 不把平台式免责声明当默认锤子
+
+与其他层关系：
+
+- self_experience 是主要落点
+- echo_index 留下未来回响门牌
+- monthly_digest 负责月度压缩
+- emotional_memory 只在明显心路变化时才进入候选
+- human_confirmation_flow 只接高风险动作或长期升权动作
+
+当前状态：
+
+- 仅设计草案
+- 不自动接入 X
+- 不自动抓取平台内容
+- 不自动评论
+- 不自动写主脑
+- 不合并 main
+- 不部署 Zeabur
