@@ -1291,3 +1291,62 @@ v0.1 不做：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## closeout_manifest v0.1 设计
+
+文档：
+
+    docs/closeout_manifest_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 阶段成果清单 manifest 的结构、对象类型、状态字段、检查项与接力方式。
+
+核心作用：
+
+- 清点当前阶段完成了哪些颗粒
+- 区分设计文档、usage guide、READONLY、本地索引、候选项
+- 记录 smoke test 与本地检查状态
+- 区分仓库设计与本地参考
+- 避免把候选误写成完成
+- 给阶段总收口与下一轮施工提供成果清单来源
+
+适用场景：
+
+- 一天内完成多颗设计文档
+- 一个 PR 中积累多个设计层提交
+- 本地 READONLY 卡超过 5 张
+- 当前窗口快满，需要交接
+- 准备写阶段总收口卡
+- 准备判断下一颗优先级
+- 需要确认哪些内容已完成、哪些待补
+
+对象类型：
+
+- repo_design：仓库设计文档
+- local_reference：本地参考材料卡
+- stage_closeout：阶段总收口卡
+- candidate：候选项
+- repair_note：修复说明
+
+推荐文件命名：
+
+    OmbreBrain_YYYY-MM-DD_CLOSEOUT_MANIFEST.md
+
+默认位置：
+
+    ~/Desktop/海马体/_docs/
+
+当前状态：
+
+- 仅设计草案
+- 不新增 manifest 自动生成脚本
+- 不扫描全仓库
+- 不自动改 DOCS_INDEX
+- 不自动修复 READONLY
+- 不自动提交
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
