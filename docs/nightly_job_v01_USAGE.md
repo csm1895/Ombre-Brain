@@ -1407,3 +1407,55 @@ v0.1 不做：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## paste_safe_writer v0.1 设计
+
+文档：
+
+    docs/paste_safe_writer_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 大段文本写入时的安全写法、分块策略、检查动作与失败恢复路径。
+
+核心作用：
+
+- 降低大段 heredoc 卡住风险
+- 降低长文本半截写入风险
+- 防止 EOF / PY / MARKER 残留成脏尾巴
+- 避免补写时覆盖旧内容
+- 固定写入前、写入后、提交前检查动作
+- 与 dirty_tail_guard / repair_note_schema 形成写入安全链
+
+适用场景：
+
+- 新增长设计文档
+- 追加 README / USAGE 大段内容
+- 写本地 READONLY 收口卡
+- 写阶段总收口卡
+- 写 manifest / repair note
+- 一次内容超过 80 行
+- 内容里包含代码块、EOF、PY、MARKER、反引号
+
+推荐策略：
+
+- 小块 printf 优先
+- heredoc 只用于短块
+- 长文档分段写
+- 每块写完先 tail 检查
+- 提交前检查脏尾巴与目标章节
+
+当前状态：
+
+- 仅设计草案
+- 不新增自动写入脚本
+- 不改 CLI
+- 不自动拆分文本
+- 不自动 commit
+- 不自动 amend
+- 不自动 force push
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
