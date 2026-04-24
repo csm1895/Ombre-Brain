@@ -1110,3 +1110,77 @@ v0.1 不做：
 - 不自动接入 MCP server
 - 不自动调用 DeepSeek
 - 不把收口路由写成真实执行程序
+
+
+## readonly_card_schema v0.1 设计
+
+文档：
+
+    docs/readonly_card_schema_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 本地 READONLY 收口卡的统一结构、必填字段、检查项与使用边界。
+
+核心作用：
+
+- 统一本地 READONLY 收口卡结构
+- 让每颗设计完成状态可快速回看
+- 固定关键提交、验证命令、边界状态
+- 防止漏写 PR / main / Zeabur / DeepSeek / xiaowo-release 状态
+- 防止 heredoc 脏尾巴残留
+- 让未来阶段总收口能直接读取这些卡
+
+适用对象：
+
+- repo_design READONLY：仓库设计文档收口
+- local_reference READONLY：本地参考材料卡
+- stage_closeout READONLY：阶段总收口
+- repair_note READONLY：重要修复说明
+
+统一文件命名：
+
+    OmbreBrain_<topic>_v01_READONLY.md
+
+阶段总收口命名：
+
+    OmbreBrain_YYYY-MM-DD_STAGE_CLOSEOUT.md
+
+必填结构：
+
+- 标题
+- 元数据
+- 当前状态
+- 当前边界
+- 核心文件
+- 主题核心内容
+- 关键提交
+- 已验证命令
+- 设计意义
+- 下次候选
+- 当前结论
+
+固定检查项：
+
+- 文件存在
+- 文件大小正常
+- DOCS_INDEX 已挂载
+- 无脏尾巴
+- repo_design 需 smoke test passed
+- repo_design 需分支已推送
+- PR #2 仍 Open
+- main 未动
+- Zeabur 未动
+- DeepSeek 未调用
+- xiaowo-release 未运行，除非该卡明确是外部运行验证
+
+当前状态：
+
+- 仅设计草案
+- 不自动生成 READONLY
+- 不改脚本
+- 不新增校验程序
+- 不合并 main
+- 不部署 Zeabur
+- 不自动写主脑
+- 不自动调用 DeepSeek
