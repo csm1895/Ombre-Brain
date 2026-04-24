@@ -780,3 +780,44 @@ v0.1 不做：
 - 不写主脑
 - 不合并 main
 - 不部署 Zeabur
+
+
+## floating_recall / memory_floater v0.1 设计
+
+文档：
+
+    docs/floating_recall_v01_DESIGN.md
+
+用途：
+
+定义叶辰一如何在上下文、时间、场景、情绪、物件、关键词触发下，自然浮现相关记忆候选，而不是只像资料库检索。
+
+核心作用：
+
+- 让词、时间、场景、情绪、物件、工具状态触发相关记忆浮现
+- 区分 silent_context / light_echo / anchored_reference / action_bias / confirm_suggestion
+- 区分 no_echo / silent / light / anchored / confirm 浮现强度
+- 防止旧记忆抢戏、翻旧账、压过倩倩当下表达
+- 让工程场景中的旧坑转化为明确动作
+
+重点原则：
+
+- 浮现是辅助，不是抢戏
+- 不要每次都明说“我想起了”
+- 相似不是相同
+- 不拿旧记忆压倩倩
+- 工程浮现要转成动作
+
+当前状态：
+
+- 仅设计草案
+- 不自动生成真实浮现
+- 不读取真实记忆库
+- 不接向量数据库
+- 不自动写主脑
+- 不自动调用 DeepSeek
+- 不自动调用 hold/grow/trace
+- 不运行 xiaowo-release
+- 不接入 MCP server
+- 不合并 main
+- 不部署 Zeabur
