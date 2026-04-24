@@ -740,3 +740,43 @@ v0.1 不做：
 - 不接入外部代码
 - 不合并 main
 - 不部署 Zeabur
+
+
+## external_reference_xiaowo_release v0.1 设计
+
+文档：
+
+    docs/external_reference_xiaowo_release_v01_DESIGN.md
+
+用途：
+
+把 xiaowo-release 定义为 OmbreBrain 的外部参考样板，而不是当前主线代码或可直接接入模块。
+
+核心作用：
+
+- 标记 xiaowo-release 为 reference_only
+- 明确它是样板间，不是地基
+- 防止外部工程直接污染 OmbreBrain 主线
+- 提取 CLI 空间化操作、房间感知、浮现召回、MCP 包装等可参考思想
+- 为后续 living_room / sensory_context、floating_recall、cli_space_map 等设计提供参考来源
+
+重点原则：
+
+- 可参考架构，不照搬结构
+- 可提取思想，不直接迁入代码
+- 当前不运行、不接入、不部署
+- 外部作者观点不能直接写成叶辰一内化
+- 未来若试跑必须隔离目录、隔离数据、隔离 API key
+
+当前状态：
+
+- 仅设计草案
+- 不运行 xiaowo-release
+- 不 npm install
+- 不启动 ChromaDB
+- 不接 API key
+- 不接 MCP server
+- 不复制外部代码
+- 不写主脑
+- 不合并 main
+- 不部署 Zeabur
