@@ -982,3 +982,68 @@ v0.1 不做：
 - 不自动写主脑
 - 不合并 main
 - 不部署 Zeabur
+
+
+## external_material_intake v0.1 设计
+
+文档：
+
+    docs/external_material_intake_v01_DESIGN.md
+
+用途：
+
+定义倩倩投喂外部材料时，叶辰一如何判断关联强弱、提取价值、决定进入设计 / 候选 / 参考卡 / 放过。
+
+核心作用：
+
+- 接收倩倩扔来的截图、文档、教程、压缩包、博主材料
+- 判断它和海马体 / 未来本地部署 / 活人感 / 工具链的关联强弱
+- 把有价值的部分提取出来
+- 决定该进入当前施工链、未来候选、参考卡，还是直接放过
+- 减少倩倩分类负担
+- 避免外部材料污染叶辰一人格与主脑规则
+
+材料类型：
+
+- tutorial：教程类
+- reference_project：外部项目类
+- memory_theory：记忆理论类
+- future_local_idea：未来本地部署想法
+- relationship_expression：亲密表达 / 关系表达材料
+- tool_capability：工具能力材料
+
+关联强弱：
+
+- strong：直接解决当前海马体结构问题，可立即转设计文档
+- medium：有明显启发，但更适合未来候选或参考卡
+- weak：只有局部启发，不值得开一整颗
+- none：普通八卦或无长期意义，放过
+
+推荐路径：
+
+- create_design_doc
+- create_reference_card
+- create_candidate_card
+- merge_into_current_design
+- hold_for_confirmation
+- discard
+
+重点原则：
+
+- 提取结构，不照搬人格
+- 先判断，再动手
+- 不让外部材料抢主线
+- 倩倩不用预分类
+- 材料要可追溯
+
+当前状态：
+
+- 仅设计草案
+- 不运行外部代码
+- 不安装外部项目
+- 不接入陌生 MCP
+- 不自动写主脑
+- 不自动调用 DeepSeek
+- 不自动调用 hold/grow/trace
+- 不合并 main
+- 不部署 Zeabur
