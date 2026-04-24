@@ -1350,3 +1350,60 @@ v0.1 不做：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## repair_note_schema v0.1 设计
+
+文档：
+
+    docs/repair_note_schema_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 重要修复说明 repair_note 的结构、触发条件、必填字段、影响判断、验证方式与沉淀路径。
+
+核心作用：
+
+- 记录出了什么问题
+- 判断影响范围
+- 记录如何修复
+- 记录修复后如何验证
+- 判断是否影响仓库、usage guide、本地 _docs、READONLY、未来施工流程
+- 判断是否需要沉淀成 guard / schema / router
+
+触发条件：
+
+- 半截文档已经 commit
+- 已 push 的提交需要 amend + force-with-lease 修复
+- heredoc / EOF / PY / MARKER 脏尾巴进入文件
+- DOCS_INDEX 出现错误挂载、重复挂载或污染
+- usage guide 引用错误
+- smoke test 曾失败并完成修复
+- 错误地碰到 main / Zeabur / DeepSeek / 外部项目
+- 本地参考材料误进仓库
+- 施工流程发生可复用的修正
+
+推荐文件命名：
+
+    OmbreBrain_repair_<topic>_v01_READONLY.md
+
+如果是日期阶段修复：
+
+    OmbreBrain_YYYY-MM-DD_REPAIR_<topic>.md
+
+默认位置：
+
+    ~/Desktop/海马体/_docs/
+
+当前状态：
+
+- 仅设计草案
+- 不新增自动修复脚本
+- 不自动扫描仓库
+- 不自动删除文件内容
+- 不自动 amend
+- 不自动 force push
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
