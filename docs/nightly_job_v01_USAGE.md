@@ -1236,3 +1236,58 @@ v0.1 不做：
 - 不部署 Zeabur
 - 不自动写主脑
 - 不自动调用 DeepSeek
+
+
+## stage_closeout_pack v0.1 设计
+
+文档：
+
+    docs/stage_closeout_pack_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 阶段总收口包的结构、触发时机、必填字段、验证状态、边界状态与下一步接力方式。
+
+核心作用：
+
+- 让下班、睡前、换窗、阶段完成时不丢线头
+- 固定阶段完成项、关键设计意义、关键提交、本地 READONLY 卡
+- 记录 smoke test、本地索引、脏尾巴检查等验证状态
+- 记录 PR / main / Zeabur / DeepSeek / xiaowo-release 等边界状态
+- 把施工经验沉淀成可复用规则
+- 给晚上或明天继续施工提供接力入口
+
+触发时机：
+
+- 下班前
+- 睡前
+- 当前窗口快满
+- 连续完成多颗设计文档后
+- PR 暂挂但不合并时
+- 一轮 smoke test 全部通过后
+- 发生重要修复并已收口后
+- 明确需要晚上 / 明天接力时
+
+推荐文件命名：
+
+    OmbreBrain_YYYY-MM-DD_STAGE_CLOSEOUT.md
+
+如果一天内多次阶段收口，可追加时间段：
+
+    OmbreBrain_YYYY-MM-DD_STAGE_CLOSEOUT_evening.md
+    OmbreBrain_YYYY-MM-DD_STAGE_CLOSEOUT_before_sleep.md
+
+默认位置：
+
+    ~/Desktop/海马体/_docs/
+
+当前状态：
+
+- 仅设计草案
+- 不改脚本
+- 不自动生成阶段收口
+- 不自动写主脑
+- 不自动 merge main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
