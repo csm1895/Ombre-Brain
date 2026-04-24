@@ -1184,3 +1184,55 @@ v0.1 不做：
 - 不部署 Zeabur
 - 不自动写主脑
 - 不自动调用 DeepSeek
+
+
+## dirty_tail_guard v0.1 设计
+
+文档：
+
+    docs/dirty_tail_guard_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 施工中 heredoc / python one-shot / 大段粘贴导致的脏尾巴、半截文档、误追加的识别、检查、修复与继续施工规则。
+
+核心作用：
+
+- 识别 heredoc 没闭合导致的卡住状态
+- 识别 EOF / PY / MARKER 等脏尾巴是否进入文件
+- 识别大段粘贴失败造成的半截文档
+- 给出安全检查顺序
+- 给出最小修复路径
+- 降低误删、误提交、误推送风险
+
+适用场景：
+
+- 终端出现 heredoc>
+- 复制大段 cat <<MARKER 后没有回到 shell 提示符
+- 只输入了 EOF / PY / MARKER，正文没有写入
+- 文档缺少后半段章节
+- grep 出现 EOF / PY / MARKER 单独行
+- commit 前怀疑文件半截
+- amend / force-with-lease 前需要确认文档完整
+- 本地 READONLY 卡写入后需要确认无脏尾巴
+
+推荐原则：
+
+- heredoc 卡住时先闭合
+- 半截文档先检查尾部和目标章节
+- 脏尾巴先定位再清理
+- 大段补写优先 printf 小块追加
+- 已推送的半截提交用 amend + force-with-lease 修正
+
+当前状态：
+
+- 仅设计草案
+- 不新增脚本
+- 不自动扫描全仓库
+- 不自动删除内容
+- 不自动 amend
+- 不自动 push
+- 不合并 main
+- 不部署 Zeabur
+- 不自动写主脑
+- 不自动调用 DeepSeek
