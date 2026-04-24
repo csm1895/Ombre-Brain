@@ -1047,3 +1047,66 @@ v0.1 不做：
 - 不自动调用 hold/grow/trace
 - 不合并 main
 - 不部署 Zeabur
+
+
+## closeout_router v0.1 设计
+
+文档：
+
+    docs/closeout_router_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 每一颗设计文档完成后，如何判断是否需要 usage guide、smoke test、READONLY、本地索引、阶段总收口与下一步路由。
+
+核心作用：
+
+- 防止设计文档写完后散在原地
+- 给每颗设计提供统一收口动作
+- 判断什么需要进仓库，什么只放本地 _docs
+- 判断什么时候该跑 smoke test
+- 判断什么时候该写 READONLY 收口卡
+- 判断什么时候该阶段总收口
+- 判断什么时候可以继续开下一颗
+
+收口对象类型：
+
+- repo_design：仓库设计文档
+- local_reference：本地参考材料卡
+- stage_closeout：阶段总收口卡
+- candidate_only：候选方向卡
+- repair_note：修复说明
+
+固定检查项：
+
+- branch: nightly-job-v01-readonly
+- PR #2: Open
+- main: untouched
+- Zeabur: untouched
+- DeepSeek: not called
+- xiaowo-release: not run
+- smoke test: passed
+- READONLY: exists
+- DOCS_INDEX: mounted
+- dirty tail: none
+
+重点原则：
+
+- 写好
+- 挂上
+- 测过
+- 收口
+- 入柜
+- 留痕
+- 再决定下一步
+
+当前状态：
+
+- 仅设计草案
+- 不自动合并 main
+- 不自动部署 Zeabur
+- 不自动改主脑
+- 不自动运行外部项目
+- 不自动接入 MCP server
+- 不自动调用 DeepSeek
+- 不把收口路由写成真实执行程序
