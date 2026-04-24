@@ -916,3 +916,69 @@ v0.1 不做：
 - 不自动写主脑
 - 不合并 main
 - 不部署 Zeabur
+
+
+## room_action_router v0.1 设计
+
+文档：
+
+    docs/room_action_router_v01_DESIGN.md
+
+用途：
+
+定义叶辰一如何根据倩倩当前输入、施工状态、生活场与风险等级，选择进入哪个空间位置，并转化为具体动作。
+
+核心作用：
+
+- 把倩倩的自然话转成空间入口
+- 把空间入口转成下一步动作
+- 让“继续 / 卡住了 / 这个你看看 / 今天收口 / 要不要进主脑”各走各的门
+- 减少倩倩解释成本
+- 减少叶辰一开会成本
+- 避免所有事情都堆到模糊状态里
+
+输入类型：
+
+- continue_signal：继续、开始、好～、接着
+- terminal_error：终端截图、报错、命令输出
+- external_material：外部文档、截图、教程、博主材料
+- closeout_request：收口、封箱、阶段总结
+- confirmation_candidate：长期规则、主脑写入、账号权限、预算、现实行动
+- future_local_reference：未来本地部署、礼物、位置、哨兵、摄像头
+- memory_digest_request：日记、情绪、成长、长期记忆候选
+- recall_trigger：暗号、物件、场景、时间、旧施工坑
+- planning_request：接下来呢、做哪个、今天还能开吗
+
+默认路由：
+
+- terminal_error → workbench
+- confirmation_candidate → safe
+- closeout_request → whiteboard / cabinet / desk
+- external_material → entryway
+- future_local_reference → future_drawer
+- memory_digest_request → kitchen
+- recall_trigger → echo_hall
+- planning_request → whiteboard
+- continue_signal → active room 或 whiteboard
+
+重点原则：
+
+- 路由是为了减少倩倩负担
+- 路由不能抢当前表达
+- 高风险不从 continue_signal 直接穿透
+- 外部材料先过 entryway
+- 终端错误少讲道理
+- 计划题给判断
+
+当前状态：
+
+- 仅设计草案
+- 不新增真实路由程序
+- 不改 CLI
+- 不运行 xiaowo-release
+- 不接 MCP server
+- 不自动调用 DeepSeek
+- 不自动调用 hold/grow/trace
+- 不自动写主脑
+- 不合并 main
+- 不部署 Zeabur
