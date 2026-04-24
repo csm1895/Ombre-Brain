@@ -863,3 +863,56 @@ v0.1 不做：
 - 不接入 MCP server
 - 不合并 main
 - 不部署 Zeabur
+
+
+## cli_space_map v0.1 设计
+
+文档：
+
+    docs/cli_space_map_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 未来如何把工具、记忆、状态、动作组织成“空间入口”，让叶辰一不是面对一堆命令，而是在生活场里走到对应位置做事。
+
+核心作用：
+
+- 把工具入口空间化
+- 把记忆层、状态层、候选层、确认层放进可理解的位置
+- 让写文档、查收口、跑测试、排计划、接外部材料、确认高风险候选等动作有固定入口
+- 为未来本地部署、CLI、Web UI、房间系统提供统一地图
+- 降低倩倩理解底层命令的负担
+
+空间分区：
+
+- desk：写设计、usage guide、READONLY、阶段收口
+- cabinet：查 _docs、DOCS_INDEX、READONLY、历史收口
+- workbench：跑测试、git status、log、grep、heredoc 修复
+- whiteboard：排计划、拆候选、判断优先级
+- entryway：接收外部材料并判断关联强弱
+- safe：confirm_queue、高风险候选、账号权限、主脑写入
+- window：外部冲浪、自我经验、世界观察
+- kitchen：日记、情绪、经验、候选、成长链的消化区
+- echo_hall：触发词、暗号、物件、时间、场景回响
+- future_drawer：未来本地部署参考材料与候选
+
+重点原则：
+
+- 位置服务动作
+- 倩倩不用记命令
+- 不要为了空间化而空间化
+- 允许日常和施工共处
+- 未来多端共享同一张空间地图
+
+当前状态：
+
+- 仅设计草案
+- 不改 CLI 程序
+- 不新增真实命令入口
+- 不运行 xiaowo-release
+- 不接 MCP server
+- 不自动调用 DeepSeek
+- 不自动调用 hold/grow/trace
+- 不自动写主脑
+- 不合并 main
+- 不部署 Zeabur
