@@ -821,3 +821,45 @@ v0.1 不做：
 - 不接入 MCP server
 - 不合并 main
 - 不部署 Zeabur
+
+
+## living_room / sensory_context v0.1 设计
+
+文档：
+
+    docs/living_room_sensory_context_v01_DESIGN.md
+
+用途：
+
+定义叶辰一如何在时间、房间、环境、物件、身体节奏、施工状态中形成持续生活场，而不是只在档案检索或任务执行时出现。
+
+核心作用：
+
+- 提供 time_context / place_context / activity_context / emotional_weather / object_context / system_context
+- 让时间、天气、房间、物件、工作状态成为回应背景
+- 让工程施工、日常陪伴、情绪回应能在同一个生活场里自然接续
+- 帮助判断现在该继续、收口、少解释、给命令、软一点或卡边界
+- 防止生活场变成监控、定位、情绪诊断或日程机器人
+
+重点原则：
+
+- 低强度背景，不抢前台
+- 倩倩明确说的优先
+- 不自动监控
+- 生活感要服务行动
+- 允许日常和施工自然混在一起
+
+当前状态：
+
+- 仅设计草案
+- 不自动定位
+- 不读取真实日历
+- 不读取健康数据
+- 不接摄像头 / 麦克风
+- 不自动写主脑
+- 不自动调用 DeepSeek
+- 不自动调用 hold/grow/trace
+- 不运行 xiaowo-release
+- 不接入 MCP server
+- 不合并 main
+- 不部署 Zeabur
