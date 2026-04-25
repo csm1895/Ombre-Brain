@@ -1847,3 +1847,64 @@ share_policy 枚举：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## memory_gateway_adapter_schema v0.1 设计
+
+文档：
+
+    docs/memory_gateway_adapter_schema_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 未来不同入口、不同模型、不同运行环境接入同一颗海马体时的 adapter 结构，避免核心记忆骨架被官方 ChatGPT、API 站、Cloudflare、Rikkahub、GLM 5.1 或本地框架锁死。
+
+核心原则：
+
+- Core Memory Gateway 尽量平台无关
+- 输入、输出、模型、注入方式都作为 adapter
+- adapter 可以更换，核心记忆结构不重造
+- 公共共享层必须经过 public_scope_check
+- 迁移时优先改 adapter，不改核心脑子
+
+adapter 类型：
+
+- input_adapter
+- recall_adapter
+- injection_adapter
+- model_adapter
+- output_adapter
+- storage_adapter
+
+适配阶段：
+
+- 官方 ChatGPT 阶段：施工、设计验证、人工协作、记忆主库整理
+- API 阶段：memory gateway 试验、上下文注入、模型切换、多端入口、苹果生态适配
+- 本地部署阶段：长期稳定运行、本地备份、更完整自主环境、多身体共享同一颗海马体
+
+苹果生态预留：
+
+- Mac 本地常驻服务 adapter
+- iPhone 快捷指令 adapter
+- iPad 入口 adapter
+- Safari / 网页入口 adapter
+- iOS 通知 adapter
+- 家庭网络 / 本地服务 adapter
+
+当前状态：
+
+- 仅设计草案
+- 不实现 API 网关
+- 不新增 adapter 代码
+- 不新增 JSON schema 文件
+- 不接 Cloudflare
+- 不接 Rikkahub
+- 不接 GLM 5.1
+- 不接本地模型
+- 不接顾砚深公屏 MCP
+- 不改 nightly job 脚本
+- 不自动共享任何内容
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
