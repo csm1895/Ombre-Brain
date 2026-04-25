@@ -1631,3 +1631,82 @@ v0.1 不做：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## recall_result_schema v0.1 设计
+
+文档：
+
+    docs/recall_result_schema_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 未来召回结果的统一结构、字段含义、优先级、隐私范围、注入策略与人工确认规则。
+
+核心作用：
+
+- 记录召回结果来自哪里
+- 记录为什么被召回
+- 判断是否应该注入上下文
+- 判断优先级
+- 判断是否涉及隐私 / 权限 / 共享边界
+- 判断是否需要人工确认
+- 避免把候选材料误当成事实
+
+推荐字段：
+
+- id
+- title
+- source
+- source_path
+- match_type
+- match_terms
+- priority
+- confidence
+- reason
+- privacy_scope
+- inject_policy
+- status
+- freshness
+- weight
+- needs_confirm
+- blocked_reason
+- notes
+
+结果分层：
+
+- must_include
+- should_include
+- candidate
+- blocked
+
+隐私范围：
+
+- private
+- public
+- shared_allowed
+- shared_blocked
+- sensitive
+
+注入策略：
+
+- inject
+- summarize_then_inject
+- mention_only
+- confirm_before_inject
+- do_not_inject
+
+当前状态：
+
+- 仅设计草案
+- 不实现召回结果对象
+- 不改 nightly job 脚本
+- 不新增 JSON schema 文件
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不接顾砚深公屏 MCP
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
