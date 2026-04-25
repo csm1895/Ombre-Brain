@@ -1513,3 +1513,61 @@ v0.1 不做：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## recall_layer_policy v0.1 设计
+
+文档：
+
+    docs/recall_layer_policy_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 未来召回层的通用策略，明确向量检索、关键词兜底、规则触发、近期上下文、人工确认分别负责什么。
+
+核心原则：
+
+- 海马体不能只靠向量检索
+- 短消息不只靠 embedding
+- 名字、暗号、物件、日期必须有关键词兜底
+- 红线、权限、当前施工状态必须由规则触发优先处理
+- 召回结果要分层注入，不一股脑塞进上下文
+- 高风险内容进入人工确认
+
+召回来源：
+
+- vector_recall
+- keyword_fallback
+- rule_trigger
+- recent_context
+- manual_confirm
+
+短消息召回顺序：
+
+    recent_context
+    → keyword_fallback
+    → rule_trigger
+    → vector_recall
+    → manual_confirm if needed
+
+召回结果分层：
+
+- must_include
+- should_include
+- candidate
+- blocked
+
+当前状态：
+
+- 仅设计草案
+- 不实现向量数据库
+- 不生成 embedding
+- 不改 nightly job 脚本
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不接顾砚深公屏 MCP
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
