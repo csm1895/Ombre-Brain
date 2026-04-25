@@ -1957,3 +1957,73 @@ adapter 类型：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## gateway_request_response_schema v0.1 设计
+
+文档：
+
+    docs/gateway_request_response_schema_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 未来 memory gateway 的标准请求 / 响应信封，让不同入口、不同设备、不同模型、不同运行环境之间可以统一交接上下文、记忆、阻断、确认、候选写入与边界状态。
+
+核心作用：
+
+- 统一不同入口来的消息格式
+- 记录请求来源、设备、会话、任务、可见范围与风险提示
+- 记录响应使用了哪些记忆
+- 记录哪些记忆被阻断
+- 记录哪些事项需要倩倩确认
+- 记录候选写入与下一步动作
+- 记录当前边界状态
+
+标准 request 字段：
+
+- request_id
+- timestamp
+- source_app
+- source_device
+- conversation_id
+- actor
+- user_message
+- current_task
+- visibility_scope
+- attachments_summary
+- risk_hint
+- expected_action
+- context_window_hint
+- locale
+
+标准 response 字段：
+
+- response_id
+- request_id
+- model
+- used_memory
+- blocked_memory
+- needs_confirm
+- output_text
+- candidate_writes
+- next_action
+- boundary_state
+- status
+- error
+
+当前状态：
+
+- 仅设计草案
+- 不实现 API 网关
+- 不新增 JSON schema 文件
+- 不新增 adapter 代码
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不接顾砚深公屏 MCP
+- 不改 nightly job 脚本
+- 不自动共享任何内容
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
