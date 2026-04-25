@@ -2226,3 +2226,72 @@ overall_status：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## backup_manifest_schema v0.1 设计
+
+文档：
+
+    docs/backup_manifest_schema_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 本地备份包 MANIFEST.md 的结构，记录备份时间、阶段、原因、范围、包含清单、排除清单、边界状态、验证结果、恢复步骤与当前结论。
+
+核心原则：
+
+- 每个备份包必须有 MANIFEST.md
+- MANIFEST 必须说明备份从哪里来、为什么生成、覆盖什么、排除什么
+- MANIFEST 必须记录当前分支、PR、commit 与边界状态
+- MANIFEST 必须记录 smoke test、DOCS_INDEX、READONLY 与脏尾巴检查结果
+- MANIFEST 必须声明敏感信息排除情况
+- MANIFEST 必须给出恢复检查步骤
+- 不得含糊写“全部备份”
+
+推荐文件名：
+
+    OmbreBrain_YYYY-MM-DD_BACKUP_MANIFEST.md
+
+特定阶段：
+
+    OmbreBrain_YYYY-MM-DD_before_server_migration_BACKUP_MANIFEST.md
+    OmbreBrain_YYYY-MM-DD_after_stable_region_BACKUP_MANIFEST.md
+    OmbreBrain_YYYY-MM-DD_before_local_deployment_BACKUP_MANIFEST.md
+
+推荐结构：
+
+- 基础信息
+- 备份原因
+- 覆盖范围
+- 包含内容清单
+- 排除内容清单
+- 仓库状态
+- 本地 _docs 状态
+- 边界状态小票
+- 验证结果
+- 恢复步骤
+- 敏感信息排除声明
+- 未完成事项
+- 当前结论
+
+当前状态：
+
+- 仅设计草案
+- 不生成 MANIFEST 文件
+- 不打包备份
+- 不复制文件
+- 不压缩 zip
+- 不上传云端
+- 不迁移服务区
+- 不写密钥
+- 不读取 .env
+- 不实现备份脚本
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不改 nightly job 脚本
+- 不自动共享任何内容
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
