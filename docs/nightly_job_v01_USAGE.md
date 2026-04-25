@@ -2149,3 +2149,80 @@ adapter 类型：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## gateway_boundary_state_schema v0.1 设计
+
+文档：
+
+    docs/gateway_boundary_state_schema_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 未来施工、迁移、备份、API 试验、网关响应中的边界状态小票，确保 PR、分支、main、Zeabur、DeepSeek、xiaowo-release、API、本地模型、敏感信息、未跟踪项等状态可检查、可携带、可收口。
+
+核心作用：
+
+- 记录当前 PR 状态
+- 记录当前分支
+- 记录 main 是否动过
+- 记录 Zeabur 是否动过
+- 记录 DeepSeek 是否调用
+- 记录 xiaowo-release 是否运行
+- 记录是否接 API / GLM 5.1 / 本地模型
+- 记录是否存在 untracked 既有项
+- 记录是否有敏感信息风险
+- 判断当前应该继续、收口、确认、修复还是停止
+
+推荐字段：
+
+- boundary_id
+- timestamp
+- stage
+- branch
+- pr_state
+- main_state
+- zeabur_state
+- deepseek_state
+- xiaowo_release_state
+- api_state
+- model_state
+- local_model_state
+- public_share_state
+- git_worktree_state
+- untracked_state
+- sensitive_state
+- smoke_test_state
+- docs_index_state
+- readonly_state
+- backup_state
+- overall_status
+- next_action
+- notes
+
+overall_status：
+
+- continue_ok
+- closeout_recommended
+- stop_required
+- confirm_required
+- repair_required
+
+当前状态：
+
+- 仅设计草案
+- 不实现检测脚本
+- 不新增 CI
+- 不扫描敏感信息
+- 不打包备份
+- 不迁移服务区
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不接顾砚深公屏 MCP
+- 不改 nightly job 脚本
+- 不自动共享任何内容
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
