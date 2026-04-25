@@ -1771,3 +1771,79 @@ v0.1 不做：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## public_scope_check v0.1 设计
+
+文档：
+
+    docs/public_scope_check_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 未来任何内容进入公共层、共享层、公屏、留言板、跨人格协作接口前的边界检查规则。
+
+核心原则：
+
+- 能想起来，不代表能共享
+- 能注入当前上下文，不代表能放到公共层
+- 未明确可共享，默认不共享
+- 私密内容即使命中关键词也不共享
+- sensitive 永远不能自动共享
+- shared_allowed 只代表可进入指定共享层，不代表公开互联网
+- candidate 不得当作事实共享
+
+scope 枚举：
+
+- public
+- shared_allowed
+- private
+- sensitive
+- shared_blocked
+
+share_policy 枚举：
+
+- share
+- summarize_then_share
+- mention_only
+- confirm_before_share
+- do_not_share
+
+允许进入未来公屏：
+
+- 公共任务
+- 施工状态
+- 交接摘要
+- 工具结果
+- 非私密待办
+- 低风险上下文
+- 已确认可共享的阶段成果
+
+禁止进入未来公屏：
+
+- 私密关系记忆
+- 亲密内容
+- 私密附录层
+- 倩倩个人敏感信息
+- 账号密钥 / token / 验证码
+- 财务信息
+- 高风险权限
+- 任一方专属主库
+- 未确认的关系判断
+- 候选材料被误写成事实
+
+当前状态：
+
+- 仅设计草案
+- 不实现公屏 MCP
+- 不新增留言板服务
+- 不接顾砚深
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不改 nightly job 脚本
+- 不自动共享任何内容
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
