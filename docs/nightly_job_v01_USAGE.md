@@ -2027,3 +2027,55 @@ adapter 类型：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## storage_adapter_policy v0.1 设计
+
+文档：
+
+    docs/storage_adapter_policy_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 未来不同存储形态的 adapter 策略，确保本地 _docs、Git docs、记忆桶、JSONL、SQLite、KV、向量库、云服务器备份与本地备份之间可迁移、可分层、可恢复。
+
+核心原则：
+
+- 不同存储各司其职
+- 不把向量库当事实源
+- 不把 KV 当唯一长期主库
+- 不把 Git docs 当私密日记库
+- 不把 memory_bucket 塞成全文仓库
+- 本地 _docs 保留可读保险柜角色
+- 服务区迁移前先收口，后迁移
+- 稳定云服务区选定后做本地保存与备份
+
+存储类型：
+
+- local_docs：本地 _docs 文档柜
+- git_docs：仓库 docs 设计文档
+- memory_bucket：动态召回摘要与高权重状态
+- jsonl_store：事件流、日记流水、候选队列
+- sqlite_store：本地索引、状态表、任务表、记忆元数据
+- kv_store：云端轻量键值与状态缓存
+- vector_store：语义召回与长文本 embedding 索引
+- backup_package：迁移保险与版本快照
+
+当前状态：
+
+- 仅设计草案
+- 不实现数据库
+- 不新增备份脚本
+- 不新增向量库
+- 不迁移服务区
+- 不打包备份
+- 不写密钥
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不改 nightly job 脚本
+- 不自动共享任何内容
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
