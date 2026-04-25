@@ -2355,3 +2355,60 @@ overall_status：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## storage_truth_source_map v0.1 设计
+
+文档：
+
+    docs/storage_truth_source_map_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 中不同类型信息以哪里为准，避免 Git docs、本地 _docs、memory_bucket、JSONL、SQLite、KV、向量库、备份包、API 网关状态之间互相打架。
+
+核心原则：
+
+- 设计事实看 Git docs + commit
+- 本地收口看 _docs READONLY + DOCS_INDEX
+- 当前施工状态看最近 stage closeout + git status + git log
+- 动态召回看 memory_bucket + READONLY 摘要
+- 语义相似看 vector_store，但只当候选
+- 备份状态看 backup manifest + boundary_state
+- 权限共享看 public_scope_check
+- 高风险动作看 human_confirmation_flow
+- 不用向量库结果直接判事实
+- 不用旧记忆覆盖当前施工状态
+- 不用候选材料覆盖已收口文档
+- 不用 KV 缓存当长期主库
+
+冲突处理顺序：
+
+1. 当前真实命令输出
+2. Git commit / repo docs
+3. 本地 READONLY + DOCS_INDEX
+4. stage closeout / closeout_manifest
+5. backup manifest / boundary_state
+6. memory_bucket 摘要
+7. vector_store 候选
+8. 未确认聊天描述
+
+当前状态：
+
+- 仅设计草案
+- 不实现同步程序
+- 不做冲突合并
+- 不新增数据库
+- 不新增向量库
+- 不改记忆桶结构
+- 不迁移服务区
+- 不打包备份
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不改 nightly job 脚本
+- 不自动共享任何内容
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
