@@ -1571,3 +1571,63 @@ v0.1 不做：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## keyword_fallback_policy v0.1 设计
+
+文档：
+
+    docs/keyword_fallback_policy_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 未来关键词兜底召回策略，确保短词、暗号、人名、物件、日期、窗口名、文件名、commit hash 和施工状态不会被向量检索漏掉。
+
+核心原则：
+
+- 向量检索负责语义相似
+- 关键词兜底负责明确锚点
+- 短消息不只靠 embedding
+- 暗号、人名、物件、日期、窗口名、文件名、commit hash 需要稳定命中
+- 关键词命中后仍需分层注入，不一股脑塞入上下文
+- 私密不共享内容即使命中关键词，也不得进入公共共享层
+
+适用对象：
+
+- 人物名
+- 暗号与纪念锚点
+- 物件与场景锚点
+- 项目与仓库锚点
+- 文件与设计名
+- commit / 版本 / 分支
+
+关键词类型：
+
+- exact_keyword
+- alias_keyword
+- phrase_keyword
+- tag_keyword
+- fuzzy_keyword
+
+命中结果分层：
+
+- must_include
+- should_include
+- candidate
+- blocked
+
+当前状态：
+
+- 仅设计草案
+- 不实现搜索程序
+- 不新增关键词库文件
+- 不生成 embedding
+- 不改 nightly job 脚本
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不接顾砚深公屏 MCP
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
