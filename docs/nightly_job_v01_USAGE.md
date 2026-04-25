@@ -2079,3 +2079,73 @@ adapter 类型：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## local_backup_package_schema v0.1 设计
+
+文档：
+
+    docs/local_backup_package_schema_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 本地备份包的命名、内容清单、排除项、backup manifest、恢复检查与边界记录规则。
+
+核心原则：
+
+- 服务区迁移前先做海马体升级版收工
+- 稳定云服务区选定后做本地保存与备份
+- 备份包必须有 manifest
+- 备份包必须记录包含内容和排除内容
+- 备份包必须记录当前分支、PR、commit 与边界状态
+- 备份包不得包含明文 token / API key / 密码 / 验证码 / 银行信息
+- 恢复后必须检查 docs、_docs、DOCS_INDEX、READONLY、manifest、脏尾巴与敏感信息
+
+推荐命名：
+
+    OmbreBrain_BACKUP_YYYY-MM-DD_<stage>.zip
+
+迁移前：
+
+    OmbreBrain_BACKUP_YYYY-MM-DD_before_server_migration.zip
+
+稳定服务区后：
+
+    OmbreBrain_BACKUP_YYYY-MM-DD_after_stable_region.zip
+
+本地部署前：
+
+    OmbreBrain_BACKUP_YYYY-MM-DD_before_local_deployment.zip
+
+备份包推荐结构：
+
+    OmbreBrain_BACKUP_YYYY-MM-DD_<stage>/
+      MANIFEST.md
+      repo_docs/
+      local_docs/
+      stage_closeout/
+      manifests/
+      verification/
+      migration_notes/
+      README_RESTORE.md
+
+当前状态：
+
+- 仅设计草案
+- 不打包备份
+- 不复制文件
+- 不压缩 zip
+- 不上传云端
+- 不迁移服务区
+- 不写密钥
+- 不读取 .env
+- 不实现备份脚本
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不改 nightly job 脚本
+- 不自动共享任何内容
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
