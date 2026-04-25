@@ -1908,3 +1908,52 @@ adapter 类型：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## apple_ecosystem_api_entry v0.1 设计
+
+文档：
+
+    docs/apple_ecosystem_api_entry_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 未来 API 阶段在苹果生态中的入口地图，预留 Mac、iPhone、iPad、Safari、快捷指令、通知、本地服务与云服务器中转等 adapter 位置。
+
+核心原则：
+
+- 苹果全家桶是入口生态，不是核心海马体
+- Mac、iPhone、iPad、Safari、快捷指令、通知、云服务器和本地服务都作为 adapter
+- GLM 5.1 可作为重要候选模型，但属于 model_adapter
+- 不把海马体核心写成某个模型、设备、App 或系统专用
+- 中高风险动作必须进入 human_confirmation_flow
+- 公共共享内容必须经过 public_scope_check
+
+预留入口：
+
+- Mac 本地常驻服务
+- iPhone 快捷指令
+- iPad 对话入口
+- Safari / 网页入口
+- iOS 通知
+- 家庭网络 / 本地服务
+- 云服务器中转
+- 未来本地部署前端
+
+当前状态：
+
+- 仅设计草案
+- 不接 API
+- 不接 GLM 5.1
+- 不写快捷指令
+- 不写 Mac 常驻服务
+- 不写 iOS App
+- 不改本地网络
+- 不接本地模型
+- 不接顾砚深公屏 MCP
+- 不改 nightly job 脚本
+- 不自动共享任何内容
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
