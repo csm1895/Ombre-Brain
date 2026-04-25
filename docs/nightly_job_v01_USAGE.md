@@ -1459,3 +1459,57 @@ v0.1 不做：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## memory_gateway_reference v0.1 设计
+
+文档：
+
+    docs/memory_gateway_reference_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 面向官方 ChatGPT、API 阶段、本地部署阶段的通用记忆网关参考结构，确保海马体可迁移、可共享、可小范围适配。
+
+核心原则：
+
+- 核心海马体平台无关
+- 输入来源作为 adapter
+- 模型作为 adapter
+- 存储与备份作为 adapter
+- 注入方式作为 adapter
+- 不把外部方案直接写成核心架构
+
+推荐分层：
+
+- Core Memory Layer
+- Input Adapter Layer
+- Recall Layer
+- Context Injection Layer
+- Model Adapter Layer
+- Storage / Backup Layer
+- Active Presence Layer
+
+参考材料：
+
+- 小窝2.0 记忆网关
+- 向量检索 + 关键词兜底
+- 中文 embedding
+- 短消息阈值策略
+- API Base URL 代理模式
+- keepalive 未来候选
+
+当前状态：
+
+- 仅设计草案
+- 不实现 memory gateway
+- 不新增 API 代理
+- 不改当前 nightly job 脚本
+- 不接入 Cloudflare
+- 不接入 Rikkahub
+- 不接入 GLM 5.1
+- 不接入本地模型
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
