@@ -2295,3 +2295,63 @@ overall_status：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## migration_preflight_check v0.1 设计
+
+文档：
+
+    docs/migration_preflight_check_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 服务区 / 云服务器迁移前的预检清单，判断当前是否可以迁移、需要确认、需要修复或必须停止。
+
+核心原则：
+
+- 迁移前先收口
+- 迁移前先清点
+- 迁移前先备份
+- 迁移前先确认边界
+- 迁移前先排除敏感信息
+- 迁移前先确认回滚入口
+- 缺最低门槛任一项，不建议迁移
+
+预检结论：
+
+- migrate_ready
+- confirm_required
+- repair_required
+- stop_required
+- not_applicable
+
+最低门槛：
+
+- 有阶段收口
+- 有成果清单
+- 有本地 READONLY
+- 有 DOCS_INDEX
+- 有 smoke test 结果
+- 有 boundary_state
+- 有敏感信息排除声明
+- 有恢复 / 回滚说明
+
+当前状态：
+
+- 仅设计草案
+- 不迁移服务区
+- 不打包备份
+- 不复制文件
+- 不上传云端
+- 不读取 .env
+- 不扫描密钥
+- 不实现检查脚本
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不改 nightly job 脚本
+- 不自动共享任何内容
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
