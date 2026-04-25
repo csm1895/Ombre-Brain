@@ -1710,3 +1710,64 @@ v0.1 不做：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## recall_injection_policy v0.1 设计
+
+文档：
+
+    docs/recall_injection_policy_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 未来召回结果注入上下文的规则，明确直接注入、摘要注入、只提示存在、确认后注入、禁止注入的适用条件。
+
+核心原则：
+
+- 想起来不等于立刻塞进上下文
+- 当前状态优先于旧记忆
+- 明确命中优先于模糊相似
+- 权限边界优先于便利性
+- 私密边界优先于共享需求
+- 候选材料不能当成事实
+- 外部参考不能写成已采用方案
+
+注入策略：
+
+- inject：可直接注入
+- summarize_then_inject：先摘要再注入
+- mention_only：只提醒存在，不注入正文
+- confirm_before_inject：注入前需要倩倩确认
+- do_not_inject：禁止注入
+
+推荐注入块：
+
+- CURRENT_STATE
+- MUST_INCLUDE
+- RELEVANT_MEMORY
+- CANDIDATES
+- BLOCKED_OR_NEEDS_CONFIRM
+
+人工确认触发：
+
+- 是否共享给顾砚深公屏
+- 是否进入长期主库
+- 是否写入高权重记忆
+- 是否触发账号 / 财务 / 权限动作
+- 是否删除 / 覆盖 / 合并
+- 是否把外部材料升级为正式设计
+
+当前状态：
+
+- 仅设计草案
+- 不实现 prompt builder
+- 不新增注入脚本
+- 不改 nightly job 脚本
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不接顾砚深公屏 MCP
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
