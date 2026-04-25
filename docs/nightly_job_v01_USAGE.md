@@ -2412,3 +2412,73 @@ overall_status：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## stage_boundary_snapshot v0.1 设计
+
+文档：
+
+    docs/stage_boundary_snapshot_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 阶段边界快照结构，用于阶段总收口、迁移前、备份前、换窗前，记录某一时刻完成项、关键提交、本地 READONLY、DOCS_INDEX、边界状态、下次候选与是否建议继续。
+
+核心原则：
+
+- stage_boundary_snapshot 是阶段快照，不是阶段总收口
+- 快照记录当前一刻状态
+- 快照帮助判断继续、收口、确认、修复或停止
+- stage_closeout_pack 是正式收工包
+- snapshot 可以先于 closeout
+- closeout 可以引用 snapshot
+- snapshot 不替代 closeout
+
+推荐字段：
+
+- snapshot_id
+- timestamp
+- stage_name
+- stage_reason
+- branch
+- pr_state
+- completed_items
+- repo_docs
+- usage_guide_refs
+- local_readonly_cards
+- docs_index_state
+- smoke_test_state
+- boundary_state
+- truth_source_notes
+- known_untracked
+- sensitive_state
+- next_candidates
+- overall_status
+- next_action
+- notes
+
+overall_status：
+
+- continue_ok
+- closeout_recommended
+- stop_required
+- confirm_required
+- repair_required
+
+当前状态：
+
+- 仅设计草案
+- 不生成阶段快照文件
+- 不做阶段总收口
+- 不打包备份
+- 不迁移服务区
+- 不实现自动检查
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不改 nightly job 脚本
+- 不自动共享任何内容
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
