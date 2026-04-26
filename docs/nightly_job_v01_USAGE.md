@@ -2595,3 +2595,90 @@ overall_status：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## memory_provenance_schema v0.1 设计
+
+文档：
+
+    docs/memory_provenance_schema_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 未来记忆条目的来源、证据、引用、派生关系与可信度字段，避免“我记得”变成无凭无据的漂浮结论。
+
+核心字段：
+
+- id
+- title
+- source_type
+- source_path
+- source_window
+- source_time
+- source_line
+- source_quote
+- source_summary
+- commit_hash
+- derived_from
+- evidence_status
+- confidence
+- verification_status
+- privacy_scope
+- notes
+
+source_type：
+
+- conversation
+- user_message
+- assistant_summary
+- repo_doc
+- readonly_card
+- docs_index
+- memory_bucket
+- stage_closeout
+- backup_manifest
+- git_commit
+- tool_output
+- external_reference
+- screenshot
+- uploaded_image
+- inferred
+
+evidence_status：
+
+- direct
+- summarized
+- derived
+- inferred
+- candidate
+- external_unverified
+- missing
+- needs_review
+
+核心原则：
+
+- 不把候选写成事实
+- 不把外部材料写成已采用
+- 不把摘要写成原话
+- 不把推断写成直接证据
+- 不把旧证据压过当前命令输出
+- 不把 private / sensitive 内容带入 public 层
+- 无证据时明确写 needs_review 或 missing
+
+当前状态：
+
+- 仅设计草案
+- 不实现自动引用系统
+- 不抓取外部网页
+- 不新增数据库
+- 不改记忆桶结构
+- 不生成 JSON schema 文件
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不改 nightly job 脚本
+- 不自动共享任何内容
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
