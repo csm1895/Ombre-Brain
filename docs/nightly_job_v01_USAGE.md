@@ -2904,3 +2904,77 @@ recommended_response：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## android_api_entry v0.1 设计
+
+文档：
+
+    docs/android_api_entry_v01_DESIGN.md
+
+用途：
+
+定义 Android 设备在 OmbreBrain 未来 API 阶段中的入口位置、适用场景、触发条件、边界规则与不能承担的职责，确保它作为 adapter 接入，而不是替代海马体本体。
+
+当前状态：
+
+- candidate_plan
+- 未购入
+- 未接入
+- 未选择具体设备
+- 未选择具体 App
+- 未接 API
+- 未接 GLM 5.1
+- 未接本地模型
+- 未接公屏 MCP
+
+可能入口类型：
+
+- API App 入口
+- 模型客户端入口
+- 通知入口
+- 自动化入口
+- 公屏 / 留言板候选入口
+- 备份 / 状态查看入口
+
+推荐 adapter：
+
+- android_device_adapter
+- android_api_client_adapter
+- android_notification_adapter
+- android_automation_adapter
+- android_public_board_adapter
+- android_status_view_adapter
+
+核心边界：
+
+- Android 只能作为 adapter
+- Android 不替代海马体本体
+- Android 不作为主库真相源
+- Android 不绕过 public_scope_check
+- Android 不直接共享私密
+- Android 不保存明文 key 到普通文档
+- Android 不自动执行高风险动作
+- Android 不自动部署 / 合并 / 调用高风险服务
+
+当前阶段：
+
+- 仅设计草案
+- 不买设备
+- 不推荐具体安卓型号
+- 不安装 App
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不接顾砚深公屏 MCP
+- 不写安卓自动化
+- 不改本地网络
+- 不保存密钥
+- 不部署云服务
+- 不迁移服务区
+- 不改 nightly job 脚本
+- 不自动共享任何内容
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
