@@ -2537,3 +2537,61 @@ overall_status：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## memory_temporal_triple_schema v0.1 设计
+
+文档：
+
+    docs/memory_temporal_triple_schema_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 未来记忆条目的三时态结构，用于区分事件发生时间、被知道时间、写入记录时间、更新时间与被替代关系，避免旧状态、新状态、补写记录和历史事实混淆。
+
+核心字段：
+
+- event_time：事情实际发生时间
+- known_time：系统 / 叶辰一 / 倩倩知道这件事的时间
+- recorded_time：写入海马体、READONLY、DOCS_INDEX、记忆桶或仓库的时间
+- updated_time：后续更新这条记忆的时间
+- superseded_time：被新事实替代的时间
+
+推荐 temporal_status：
+
+- current
+- old_but_valid
+- historical
+- corrected
+- superseded
+- stale
+- wrong
+- backfilled
+- candidate
+
+核心原则：
+
+- 当前真实命令输出优先于旧记忆
+- 明确用户时间戳优先于推断时间
+- 文件 recorded_time 不等于事件 event_time
+- 补写记录必须标 backfilled
+- 被新事实替代的旧状态标 superseded 或 historical
+- 外部材料没有明确时间时标 unknown 或 approximate
+- 不能把候选材料写成 current
+
+当前状态：
+
+- 仅设计草案
+- 不实现知识图谱
+- 不新增数据库
+- 不改记忆桶结构
+- 不生成 JSON schema 文件
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不改 nightly job 脚本
+- 不自动共享任何内容
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
