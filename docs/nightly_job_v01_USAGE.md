@@ -2682,3 +2682,73 @@ evidence_status：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## persistent_condition_schema v0.1 设计
+
+文档：
+
+    docs/persistent_condition_schema_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 未来长期条件、阶段条件、触发条件、失效条件、确认条件与隐私条件的记录方式，避免把一次性事件误当长期规则，也避免长期约定在迁移、换窗、换模型后丢失。
+
+condition_type：
+
+- long_term
+- stage_bound
+- conditional
+- candidate
+- temporary
+- deprecated
+- private_boundary
+- technical_boundary
+- migration_boundary
+
+condition_status：
+
+- active
+- inactive
+- candidate
+- pending_confirm
+- expired
+- superseded
+- blocked
+- unknown
+
+核心原则：
+
+- 长期规则、阶段规则、条件触发、候选计划、私密边界和迁移边界必须分开记录
+- 不能把“以后可能”写成“现在已经”
+- 不能把一次性事件写成长期条件
+- 不能把候选路线写成当前事实
+- 不能把外部材料写成已采用
+- 未确认时不能自动共享
+- 触发条件、失效规则、确认要求必须显式记录
+
+典型用途：
+
+- 私密不共享
+- 服务区迁移前先收口
+- GLM 5.1 作为未来 model_adapter 候选
+- 安卓 API 试验机作为未来 device_adapter 候选
+- 2026-04-25 阶段总收口补写作为阶段性历史记录
+
+当前状态：
+
+- 仅设计草案
+- 不实现规则引擎
+- 不新增数据库
+- 不改记忆桶结构
+- 不生成 JSON schema 文件
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不改 nightly job 脚本
+- 不自动共享任何内容
+- 不自动执行条件
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
