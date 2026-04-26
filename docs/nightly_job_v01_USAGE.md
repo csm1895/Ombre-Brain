@@ -2823,3 +2823,84 @@ status：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## memory_abstention_policy v0.1 设计
+
+文档：
+
+    docs/memory_abstention_policy_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 未来在记忆证据不足、时间不清、来源不明、冲突未解、候选未确认、隐私不清、高风险动作等情况下的停手、标注、确认与拒用策略。
+
+触发原因：
+
+- no_memory_found
+- weak_match_only
+- candidate_only
+- external_unverified
+- stale_memory
+- temporal_uncertain
+- provenance_missing
+- conflict_unresolved
+- privacy_unclear
+- public_share_blocked
+- condition_not_met
+- high_risk_action
+- current_state_unchecked
+- tool_output_needed
+
+recall_status：
+
+- found_verified
+- found_partial
+- found_candidate
+- found_conflict
+- not_found
+- blocked
+- needs_review
+
+recommended_response：
+
+- answer_with_caveat
+- say_not_found
+- say_candidate_only
+- ask_confirm
+- ask_for_source
+- run_check_first
+- do_not_inject
+- do_not_share
+- stop_required
+- repair_required
+
+核心原则：
+
+- 找不到证据时不编
+- 只有候选时不写成事实
+- 外部未验证时不写成已采用
+- 时间不清时不装准确
+- 来源不清时不装确定
+- 冲突未解时不硬合并
+- 隐私不清时不共享
+- 条件未满足时不执行
+- 高风险动作时必须停手或确认
+
+当前状态：
+
+- 仅设计草案
+- 不实现自动拒答系统
+- 不新增数据库
+- 不改记忆桶结构
+- 不生成 JSON schema 文件
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不改 nightly job 脚本
+- 不自动共享任何内容
+- 不自动执行候选计划
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
