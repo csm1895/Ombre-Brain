@@ -2482,3 +2482,58 @@ overall_status：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## external_material_recall_ai_reference v0.1 外部参考
+
+文档：
+
+    docs/external_material_recall_ai_reference_v01.md
+
+用途：
+
+记录 2026-04-26 倩倩提供的小红书 Recall-AI 长期记忆系统帖子，作为 OmbreBrain 外部参考材料。
+
+定位：
+
+- reference_only
+- external_candidate
+- unverified_claim
+- not_adopted_yet
+
+核心启发：
+
+- 独立记忆层，不绑定平台
+- 三时态知识图谱：事情发生时、被系统知道时、被记录时
+- 多层检索漏斗：时间、实体、图谱、全文、N-gram、向量、重排序等
+- 引用溯源：记忆应尽量回到原始片段
+- 矛盾检测：处理旧事实、新事实和冲突信息
+- 持久条件：沉淀长期有效的目标、偏好、环境、约束和设定
+- 伏笔追踪：记录未展开、后续可能继续使用的上下文线索
+- 用户画像合成：谨慎作为长期候选，不能压过原话和事件证据
+- 拒答 / 不确定能力：找不到、只找到候选、可能过时、不能共享时应停手
+
+后续候选：
+
+- memory_temporal_triple_schema v0.1
+- memory_provenance_schema v0.1
+- contradiction_detection_policy v0.1
+- persistent_condition_schema v0.1
+- foreshadow_tracking_schema v0.1
+- memory_abstention_policy v0.1
+- multi_stage_retrieval_funnel v0.1
+- user_profile_synthesis_policy v0.1
+
+当前状态：
+
+- 仅外部参考
+- 不采用外部实现
+- 不验证 benchmark
+- 不接外部服务
+- 不新增依赖
+- 不改变当前 memory gateway / adapter / storage / backup 主线
+- 不把 Recall-AI 当作事实源
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
