@@ -2752,3 +2752,74 @@ condition_status：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+
+## foreshadow_tracking_schema v0.1 设计
+
+文档：
+
+    docs/foreshadow_tracking_schema_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 未来伏笔、延后事项、触发条件、责任对象、优先级、状态与下一步动作，避免“后面再说”“迁移后再做”“明天继续”等重要候选散落在聊天里。
+
+核心字段：
+
+- id
+- title
+- pending_topic
+- origin_time
+- recorded_time
+- related_project
+- deferred_reason
+- deferred_until
+- trigger_condition
+- status
+- priority
+- owner
+- next_action
+- confirmation_state
+- privacy_scope
+- provenance_fields
+- temporal_fields
+- condition_fields
+- notes
+
+status：
+
+- pending
+- candidate
+- active
+- completed
+- blocked
+- cancelled
+- superseded
+- needs_confirm
+
+典型伏笔：
+
+- 顾砚深公屏 MCP：云服务器迁移后再做
+- 安卓 API 试验机：海马体升级和云服务器迁移后再考虑
+- 本地部署：2026-09 至 2026-10 左右逐步推进
+- API 阶段：云服务器迁移后开始折腾
+- Recall-AI 启发后续 schema：逐颗转成 OmbreBrain 自己的 schema / policy
+
+当前状态：
+
+- 仅设计草案
+- 不实现自动提醒
+- 不新增任务系统
+- 不新增数据库
+- 不改记忆桶结构
+- 不生成 JSON schema 文件
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不改 nightly job 脚本
+- 不自动共享任何内容
+- 不自动执行候选计划
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
