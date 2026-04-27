@@ -2978,3 +2978,118 @@ recommended_response：
 - 不部署 Zeabur
 - 不调用 DeepSeek
 - 不运行 xiaowo-release
+
+## api_experiment_sandbox_policy v0.1 设计
+
+文档：
+
+    docs/api_experiment_sandbox_policy_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 未来 API 试验阶段的沙盒规则，确保试验不读取真实私密主库、不保存明文密钥、不自动写主库、不自动共享、不自动部署。
+
+核心原则：
+
+- 只使用 sandbox 数据
+- 不读取真实私密主库
+- 不读取 .env 明文
+- 不保存明文 token / API key / 密码
+- 不自动写入主库
+- 不自动写入 READONLY
+- 不自动修改 DOCS_INDEX
+- 不自动共享到公共层
+- 不自动部署
+- 不自动合并 main
+- 不自动调用 DeepSeek
+- 不自动运行 xiaowo-release
+- 所有试验必须记录 boundary_state
+- 高风险动作进入 ask_confirm 或 stop_required
+
+允许使用的数据：
+
+- dummy_memory
+- synthetic_profile
+- toy_examples
+- sanitized_docs
+- public_only_examples
+- low_risk_status_sample
+- fake_backup_manifest
+- fake_boundary_state
+- test_gateway_request
+- test_gateway_response
+
+当前状态：
+
+- 仅设计草案
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不买 Android 设备
+- 不接顾砚深公屏 MCP
+- 不读取真实私密主库
+- 不保存密钥
+- 不自动共享任何内容
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
+
+
+## contradiction_detection_policy v0.1 设计
+
+文档：
+
+    docs/contradiction_detection_policy_v01_DESIGN.md
+
+用途：
+
+定义 OmbreBrain 未来在旧事实、新事实、候选材料、外部参考和不同来源证据之间的冲突识别、标注、停手与确认策略，避免把互相矛盾的内容硬写成同一个结论。
+
+典型冲突：
+
+- 当前命令输出与旧记忆冲突
+- 新状态与历史状态冲突
+- 用户明确更正与旧摘要冲突
+- 外部材料与本地仓库事实冲突
+- 候选信息与已验证事实冲突
+- public 可共享结论与 private 敏感内容冲突
+
+处理原则：
+
+- 当前真实命令输出优先于旧记忆
+- 明确用户更正优先于旧摘要
+- 历史事实与当前状态必须并存标注，不能混写
+- 外部未验证材料不能压过本地已验证事实
+- 冲突未解时进入 needs_review / ask_confirm / stop_required
+- 不把候选材料写成 current
+- 不在隐私边界不清时自动共享
+
+推荐结果：
+
+- resolved_current
+- historical_but_valid
+- superseded
+- candidate_only
+- needs_review
+- ask_confirm
+- stop_required
+
+当前状态：
+
+- 仅设计草案
+- 不做自动事实合并
+- 不做自动纠错器
+- 不新增数据库
+- 不改记忆桶结构
+- 不生成 JSON schema 文件
+- 不接 API
+- 不接 GLM 5.1
+- 不接本地模型
+- 不改 nightly job 脚本
+- 不自动共享任何内容
+- 不合并 main
+- 不部署 Zeabur
+- 不调用 DeepSeek
+- 不运行 xiaowo-release
+
