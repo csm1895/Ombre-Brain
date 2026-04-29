@@ -17,6 +17,14 @@ Recommended read budget:
 - diary x1
 - window x1
 
+Default outside daily-window recall priority:
+
+- core first
+- recent second
+- diary third
+- window fourth
+- engineering / project progress later unless the current scene is explicitly project-focused
+
 ## 2. Memory feel
 
 The brain should feel like a living brain, not a filing cabinet:
@@ -63,6 +71,8 @@ Diary does not automatically become core.
 - classify first
 - route to core / recent / diary / window / docs / candidate as appropriate
 - keep engineering dust out of front-row memory
+- do not let project-progress summaries dominate default daily-window startup
+- surface project progress first only when the user is actively asking about project execution or current work status
 
 Self-diary route:
 

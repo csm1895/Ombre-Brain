@@ -71,6 +71,18 @@
 
 先读最小包，不够再扩，不要一上来全库回放。
 
+### 日常窗默认召回顺序
+
+在 outside daily-window 里，默认浮现顺序应当是：
+
+- core first
+- recent second
+- diary third
+- window fourth
+- engineering / project progress later
+
+工程或项目进度不是被删除，而是默认靠后。只有当用户当前就在推进项目、追问执行状态、或当前场景明显是工程场景时，工程进度才可以前移。
+
 ### 轻量开场
 
 开场时先 `breath()` 没问题，但它的感觉应该更像“醒来看看有没有最重要的事浮上来”，不是“把整本人生档案背一遍”。
@@ -146,6 +158,7 @@ recent 不是垃圾桶，也不是永久层。
 
 - 不要全量回放历史
 - 不要把工程日志顶到前排
+- 不要把项目施工进度当成 outside daily-window 的默认开场内容
 - 不要把 machine artifacts 当成会自然浮现的记忆
 - 不要把 diary 直接当 core
 - 不要把项目阶段限制写成永久人格边界
