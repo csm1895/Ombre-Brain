@@ -52,6 +52,7 @@ from mcp.server.fastmcp import FastMCP
 from bucket_manager import BucketManager
 from dehydrator import Dehydrator
 from decay_engine import DecayEngine
+from ombre_mcp_readonly.registry import READONLY_TOOL_REGISTRY
 from utils import load_config, setup_logging
 
 # --- Load config & init logging / 加载配置 & 初始化日志 ---
@@ -934,6 +935,43 @@ async def breath(
         return "未找到相关记忆。"
 
     return time_section + iron_rules_section + user_states_section + attachment_section + "\n---\n".join(results)
+
+
+@mcp.tool()
+async def startup_bridge(scene: str = "outside_daily_window") -> str:
+    """新窗口启动桥。给 fresh window 一个真实的海马体入口，先走最小读取预算，再返回 live recall。"""
+    normalized_scene = (scene or "outside_daily_window").strip().lower()
+    if normalized_scene not in ("outside_daily_window", "daily_window", "general"):
+        normalized_scene = "outside_daily_window"
+
+    header = (
+        "=== Startup Bridge ===\n"
+        f"scene: {normalized_scene}\n"
+        "This startup package comes from the real hippocampus path: startup_bridge -> breath.\n\n"
+        "=== Read Budget ===\n"
+        "- core x1\n"
+        "- recent x2\n"
+        "- diary x1\n"
+        "- window x1\n\n"
+        "=== Default Recall Priority ===\n"
+        "- core first\n"
+        "- recent second\n"
+        "- diary third\n"
+        "- window fourth\n"
+        "- engineering / project progress later unless the current scene is explicitly project-focused\n\n"
+        "=== Routing Notes ===\n"
+        "- self-written 1-3 day diary belongs to the diary route first\n"
+        "- repeated motifs may bridge upward later\n"
+        "- temporary project-stage context is not core memory\n\n"
+        "=== Fallback ===\n"
+        "- if recall feels thin, use pulse() next\n"
+        "- if retrieval is still thin, use the startup payload / fallback summary\n"
+        "- do not ask the user to resend tutorials first\n\n"
+        "=== Live Recall ===\n"
+    )
+
+    recall = await breath(query="", max_results=3)
+    return header + recall
 
 
 # =============================================================
@@ -1976,6 +2014,13 @@ async def api_test_dream(request):
     return Response(str({"result": result}), media_type="application/json")
 
 
+@mcp.custom_route("/api/startup-bridge", methods=["GET"])
+async def api_startup_bridge(request):
+    scene = request.query_params.get("scene", "outside_daily_window")
+    result = await startup_bridge(scene=scene)
+    return Response(str({"result": result}), media_type="application/json")
+
+
 def _api_notes_file():
     from pathlib import Path
     import os
@@ -2056,6 +2101,27 @@ async def api_test_peek(request):
     )
     return Response(str({"result": text, "file": str(f)}), media_type="application/json")
 
+
+# ============================================================
+# Level 0 readonly OmbreBrain docs tools
+# 独立只读工具注册层，不接入写入 / 模型 / nightly-diary
+# ============================================================
+def _register_ombre_readonly_tool(tool_name: str, tool_func):
+    @mcp.tool(name=tool_name)
+    async def _readonly_wrapper(arg: str = "") -> dict:
+        if tool_name == "ombre.handoff.pr2.read":
+            return tool_func(arg or "both")
+        if tool_name in ("ombre.reference.read", "ombre.intake.batch.read"):
+            return tool_func(arg)
+        return tool_func()
+
+    return _readonly_wrapper
+
+
+_OMBRE_READONLY_WRAPPERS = {
+    tool_name: _register_ombre_readonly_tool(tool_name, tool_func)
+    for tool_name, tool_func in READONLY_TOOL_REGISTRY.items()
+}
 
 
 # --- Entry point / 启动入口 ---

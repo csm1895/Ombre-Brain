@@ -9,6 +9,7 @@ It updates how the body should use the brain without importing private archive c
 - Start light.
 - Do not replay the whole archive.
 - Read the smallest relevant bundle first.
+- Fresh outside windows should enter the real hippocampus path through `startup_bridge`, not instruction-only mimicry.
 
 Recommended read budget:
 
@@ -82,6 +83,7 @@ Self-diary route:
 
 Sync and fallback:
 
+- `startup_bridge` is the preferred fresh-window startup entrypoint
 - a minimal sync command should refresh current routing rules before writing
 - if retrieval fails, use the startup payload and fallback summary first
 - do not ask the user to resend tutorials
