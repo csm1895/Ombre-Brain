@@ -885,7 +885,6 @@ async def breath(
                 ):
                     created_str = b["metadata"].get("created", "")
                     try:
-                        from datetime import datetime, timedelta
                         created = datetime.fromisoformat(created_str)
                         days_old = (datetime.now() - created).days
                         if days_old > 7:
@@ -960,7 +959,6 @@ async def breath(
             first_match = matches[0]
             created_time = first_match.get("metadata", {}).get("created", "")
             if created_time:
-                from datetime import datetime, timedelta
                 try:
                     anchor_time = datetime.fromisoformat(created_time)
                     start_time = anchor_time - timedelta(days=3)
