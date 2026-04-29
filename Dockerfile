@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy project files / 复制项目文件
 COPY *.py .
+COPY ombre_mcp_readonly ./ombre_mcp_readonly
 COPY config.example.yaml ./config.yaml
 COPY buckets ./buckets
 

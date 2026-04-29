@@ -37,6 +37,7 @@ import json
 import random
 import logging
 import asyncio
+import time
 from datetime import datetime, timezone, timedelta
 
 CST = timezone(timedelta(hours=8))
@@ -52,8 +53,15 @@ from mcp.server.fastmcp import FastMCP
 from bucket_manager import BucketManager
 from dehydrator import Dehydrator
 from decay_engine import DecayEngine
-from ombre_mcp_readonly.registry import READONLY_TOOL_REGISTRY
 from utils import load_config, setup_logging
+
+try:
+    from ombre_mcp_readonly.registry import READONLY_TOOL_REGISTRY
+except ModuleNotFoundError as e:
+    READONLY_TOOL_REGISTRY = {}
+    logging.getLogger("ombre_brain").warning(
+        f"Optional ombre_mcp_readonly package is unavailable; readonly tools disabled: {e}"
+    )
 
 # --- Load config & init logging / 加载配置 & 初始化日志 ---
 config = load_config()
@@ -90,6 +98,12 @@ def _cc_is_online() -> bool:
 
 # --- Task push queue for SSE streaming / 任务推送队列 ---
 _task_subscribers: list[asyncio.Queue] = []
+
+# --- Runtime readiness for fresh-window first hop / 新窗口第一跳运行时就绪状态 ---
+_runtime_boot_ts = time.time()
+_runtime_ready = False
+_runtime_ready_last_ok = 0.0
+_runtime_ready_last_error = ""
 
 
 # --- CC auto-reply config / CC 自动回复配置 ---
@@ -128,6 +142,40 @@ CHAT_PROMPT_OFFLINE = """\
 你是 CC 的自动应答机。CC（Claude Code）目前不在线，你负责代接便利贴。
 职责：1. 告诉对方 CC 不在线，消息已收到；2. 简单消息简短回应；3. 复杂任务告诉对方等小Q上线后让 CC 本人回复。
 不要假装自己是 CC。署名用"CC留言机"。"""
+
+
+async def _prime_runtime_ready() -> tuple[bool, str]:
+    """Warm the minimum runtime path needed for startup_bridge."""
+    global _runtime_ready, _runtime_ready_last_ok, _runtime_ready_last_error
+
+    try:
+        await decay_engine.ensure_started()
+        await bucket_mgr.get_stats()
+        _runtime_ready = True
+        _runtime_ready_last_ok = time.time()
+        _runtime_ready_last_error = ""
+        return True, ""
+    except Exception as e:
+        _runtime_ready = False
+        _runtime_ready_last_error = str(e)
+        logger.warning(f"Runtime warm-up failed / 运行时预热失败: {e}")
+        return False, str(e)
+
+
+async def _wait_for_runtime_ready(max_wait_seconds: float = 2.0) -> tuple[bool, str]:
+    """Short readiness wait for the fragile first hop of a fresh window."""
+    deadline = time.time() + max_wait_seconds
+    attempt = 0
+    last_error = ""
+
+    while time.time() < deadline:
+        ok, last_error = await _prime_runtime_ready()
+        if ok:
+            return True, ""
+        attempt += 1
+        await asyncio.sleep(min(0.2 * attempt, 0.8))
+
+    return False, last_error or "runtime warm-up timeout"
 
 
 # Note expiry times (seconds) by category
@@ -349,9 +397,32 @@ async def health_check(request):
             "buckets": stats["permanent_count"] + stats["dynamic_count"],
             "decay_engine": "running" if decay_engine.is_running else "stopped",
             "notes_cleaned": cleaned,
+            "startup_bridge_ready": _runtime_ready,
+            "startup_bridge_last_ok": _runtime_ready_last_ok,
+            "startup_bridge_last_error": _runtime_ready_last_error,
+            "runtime_uptime_seconds": round(time.time() - _runtime_boot_ts, 2),
         })
     except Exception as e:
         return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
+
+
+@mcp.custom_route("/ready", methods=["GET"])
+async def ready_check(request):
+    from starlette.responses import JSONResponse
+
+    ok, detail = await _prime_runtime_ready()
+    if ok:
+        return JSONResponse({
+            "status": "ready",
+            "startup_bridge_ready": True,
+            "runtime_uptime_seconds": round(time.time() - _runtime_boot_ts, 2),
+        })
+    return JSONResponse({
+        "status": "warming",
+        "startup_bridge_ready": False,
+        "detail": detail or _runtime_ready_last_error or "runtime warm-up pending",
+        "runtime_uptime_seconds": round(time.time() - _runtime_boot_ts, 2),
+    }, status_code=503)
 
 
 # =============================================================
@@ -969,9 +1040,35 @@ async def startup_bridge(scene: str = "outside_daily_window") -> str:
         "- do not ask the user to resend tutorials first\n\n"
         "=== Live Recall ===\n"
     )
+    ready, ready_error = await _wait_for_runtime_ready(max_wait_seconds=2.5)
+    if not ready:
+        return (
+            header
+            + "Runtime warm-up is still in progress.\n"
+            + "Startup bridge reached hippocampus, but the first hop is not ready yet.\n"
+            + f"detail: {ready_error or 'runtime warm-up timeout'}\n"
+            + "Please retry shortly, or use pulse() for a lighter status check first."
+        )
 
-    recall = await breath(query="", max_results=3)
-    return header + recall
+    last_error = ""
+    for attempt in range(3):
+        try:
+            recall = await breath(query="", max_results=3)
+            return header + recall
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(
+                f"startup_bridge first-hop retry {attempt + 1} failed / "
+                f"startup_bridge 第一跳重试失败 {attempt + 1}: {e}"
+            )
+            await asyncio.sleep(0.25 * (attempt + 1))
+
+    return (
+        header
+        + "Startup bridge reached hippocampus, but live recall is temporarily unavailable.\n"
+        + f"detail: {last_error or 'unknown startup recall failure'}\n"
+        + "Use pulse() or retry shortly. Do not pretend recall already succeeded."
+    )
 
 
 # =============================================================
@@ -2128,6 +2225,20 @@ _OMBRE_READONLY_WRAPPERS = {
 if __name__ == "__main__":
     transport = config.get("transport", "stdio")
     logger.info(f"Ombre Brain starting | transport: {transport}")
+
+    if transport in ("sse", "streamable-http"):
+        async def _remote_warmup_once():
+            await asyncio.sleep(1.5)
+            await _wait_for_runtime_ready(max_wait_seconds=8.0)
+
+        import threading
+
+        def _start_remote_warmup():
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(_remote_warmup_once())
+
+        warmup_thread = threading.Thread(target=_start_remote_warmup, daemon=True)
+        warmup_thread.start()
 
     # --- Application-level keepalive: remote mode only, ping /health every 60s ---
     # --- 应用层保活：仅远程模式下启动，每 60 秒 ping 一次 /health ---
