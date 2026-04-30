@@ -706,6 +706,50 @@ def strip_wikilinks(text):
     return text
 
 
+async def _write_wrapper_candidate(
+    content: str,
+    *,
+    domain: list[str],
+    extra_tags: list[str],
+    importance: int,
+    metadata: dict,
+    fallback_name: str,
+) -> tuple[str, str]:
+    """Minimal wrapper write path: create dynamic candidate bucket, then patch metadata."""
+    await decay_engine.ensure_started()
+
+    if not content or not content.strip():
+        raise ValueError("内容为空，无法写入。")
+
+    try:
+        analysis = await dehydrator.analyze(content)
+    except Exception as e:
+        logger.warning(f"Wrapper auto-tagging failed, using defaults / wrapper 自动打标失败: {e}")
+        analysis = {
+            "domain": domain,
+            "valence": 0.5,
+            "arousal": 0.3,
+            "tags": [],
+            "suggested_name": "",
+        }
+
+    all_tags = list(dict.fromkeys((analysis.get("tags", []) or []) + extra_tags))
+    bucket_id = await bucket_mgr.create(
+        content=content.strip(),
+        tags=all_tags,
+        importance=max(1, min(10, importance)),
+        domain=domain,
+        valence=analysis.get("valence", 0.5),
+        arousal=analysis.get("arousal", 0.3),
+        bucket_type="dynamic",
+        name=(analysis.get("suggested_name") or fallback_name or None),
+    )
+    await bucket_mgr.update(bucket_id, tags=all_tags, **metadata)
+    bucket = await bucket_mgr.get(bucket_id)
+    bucket_name = bucket.get("metadata", {}).get("name", bucket_id) if bucket else bucket_id
+    return bucket_id, bucket_name
+
+
 def _mark_runtime_activity(source: str = "runtime") -> None:
     global _cadence_last_activity_ts
     _cadence_last_activity_ts = time.time()
@@ -1372,6 +1416,94 @@ async def hold(
         f"已创建新记忆桶: {result_name}\n"
         f"主题域: {', '.join(domain)} | 情感: V{valence:.1f}/A{arousal:.1f} | 标签: {', '.join(all_tags)}"
     )
+
+
+@mcp.tool()
+async def write_diary_draft(content: str) -> str:
+    """写入自写日记草稿。固定进入 diary_draft → night_clean_queue，不直写 core/recent。"""
+    try:
+        bucket_id, bucket_name = await _write_wrapper_candidate(
+            content,
+            domain=["日记草稿"],
+            extra_tags=["self_written_diary", "diary_draft", "pending_review", "night_clean_queue"],
+            importance=5,
+            metadata={
+                "source_type": "self_written_diary",
+                "layer": "diary_draft",
+                "status": "pending_review",
+                "route": "night_clean_queue",
+            },
+            fallback_name="日记草稿",
+        )
+        return (
+            f"已写入日记草稿: {bucket_name}\n"
+            f"ID: {bucket_id}\n"
+            "route=night_clean_queue | layer=diary_draft | status=pending_review"
+        )
+    except Exception as e:
+        return f"写入日记草稿失败: {e}"
+
+
+@mcp.tool()
+async def enqueue_night_clean_input(content: str) -> str:
+    """把长输入或杂乱输入放进夜间整理队列，只进 draft/candidate。"""
+    try:
+        bucket_id, bucket_name = await _write_wrapper_candidate(
+            content,
+            domain=["夜间整理"],
+            extra_tags=["draft", "night_clean_queue", "pending"],
+            importance=3,
+            metadata={
+                "source_type": "night_clean_input",
+                "layer": "draft",
+                "status": "pending",
+                "route": "night_clean_queue",
+                "priority_label": "low",
+            },
+            fallback_name="夜间整理输入",
+        )
+        return (
+            f"已加入夜间整理队列: {bucket_name}\n"
+            f"ID: {bucket_id}\n"
+            "route=night_clean_queue | layer=draft | priority=low | status=pending"
+        )
+    except Exception as e:
+        return f"加入夜间整理队列失败: {e}"
+
+
+@mcp.tool()
+async def write_project_workzone_update(content: str, type: str = "workzone") -> str:
+    """写入工程 workzone 或 pending proposal，不自动落到 landed，也不写生活层。"""
+    normalized = (type or "workzone").strip().lower()
+    if normalized not in ("workzone", "pending"):
+        return "type 只能是 workzone 或 pending。"
+
+    domain = ["工程工作区"] if normalized == "workzone" else ["待定方案"]
+    extra_tags = ["project_update", "engineering_workzone"] if normalized == "workzone" else ["project_update", "pending_proposal"]
+    metadata = {
+        "source_type": "project_update",
+        "layer": "engineering_workzone" if normalized == "workzone" else "pending_proposal",
+        "status": "active" if normalized == "workzone" else "not_landed",
+        "route": "project_workzone" if normalized == "workzone" else "pending_proposal",
+    }
+    fallback_name = "工程进度" if normalized == "workzone" else "待定方案"
+
+    try:
+        bucket_id, bucket_name = await _write_wrapper_candidate(
+            content,
+            domain=domain,
+            extra_tags=extra_tags,
+            importance=4,
+            metadata=metadata,
+            fallback_name=fallback_name,
+        )
+        return (
+            f"已写入工程更新: {bucket_name}\n"
+            f"ID: {bucket_id}\n"
+            f"layer={metadata['layer']} | status={metadata['status']} | route={metadata['route']}"
+        )
+    except Exception as e:
+        return f"写入工程更新失败: {e}"
 
 
 # =============================================================

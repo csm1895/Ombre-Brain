@@ -246,12 +246,24 @@ class BucketManager:
             post["resolved"] = bool(kwargs["resolved"])
         if "priority" in kwargs:
             post["priority"] = max(1, min(10, int(kwargs["priority"])))
+        if "priority_label" in kwargs:
+            post["priority_label"] = kwargs["priority_label"]
         if "active" in kwargs:
             post["active"] = bool(kwargs["active"])
         if "start_date" in kwargs:
             post["start_date"] = kwargs["start_date"]
         if "end_date" in kwargs:
             post["end_date"] = kwargs["end_date"]
+        if "source_bucket" in kwargs:
+            post["source_bucket"] = kwargs["source_bucket"]
+        if "source_type" in kwargs:
+            post["source_type"] = kwargs["source_type"]
+        if "layer" in kwargs:
+            post["layer"] = kwargs["layer"]
+        if "status" in kwargs:
+            post["status"] = kwargs["status"]
+        if "route" in kwargs:
+            post["route"] = kwargs["route"]
         if "state_name" in kwargs:
             post["state_name"] = kwargs["state_name"]
         if "state_desc" in kwargs:
