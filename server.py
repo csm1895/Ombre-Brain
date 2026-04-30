@@ -105,6 +105,22 @@ _runtime_ready = False
 _runtime_ready_last_ok = 0.0
 _runtime_ready_last_error = ""
 
+# --- Dual-cadence draft-only execution / 双节奏草稿执行 ---
+CADENCE_ENABLED = os.environ.get("OMBRE_DUAL_CADENCE_ENABLED", "1").lower() not in ("0", "false", "no")
+CADENCE_DRAFT_DIR = os.environ.get(
+    "OMBRE_CADENCE_DRAFT_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "cadence_drafts"),
+)
+CADENCE_IDLE_MINUTES = max(60, int(os.environ.get("OMBRE_IDLE_CADENCE_MINUTES", "120")))
+CADENCE_NIGHT_START_HOUR = max(0, min(23, int(os.environ.get("OMBRE_NIGHT_CADENCE_START_HOUR", "1"))))
+CADENCE_NIGHT_END_HOUR = max(1, min(24, int(os.environ.get("OMBRE_NIGHT_CADENCE_END_HOUR", "6"))))
+CADENCE_NIGHT_MIN_IDLE_MINUTES = max(30, int(os.environ.get("OMBRE_NIGHT_MIN_IDLE_MINUTES", "90")))
+CADENCE_CHECK_INTERVAL_SECONDS = max(120, int(os.environ.get("OMBRE_CADENCE_CHECK_INTERVAL_SECONDS", "300")))
+_cadence_last_activity_ts = time.time()
+_cadence_last_idle_run_ts = 0.0
+_cadence_last_night_run_date = ""
+_cadence_last_report = {}
+
 
 # --- CC auto-reply config / CC 自动回复配置 ---
 CC_API_KEY = os.environ.get("CC_API_KEY", os.environ.get("OMBRE_API_KEY", ""))
@@ -443,6 +459,7 @@ async def api_status(request):
     global _cc_last_heartbeat
     if request.method == "POST":
         _cc_last_heartbeat = time.time()
+        _mark_runtime_activity("api_status_heartbeat")
         logger.info("CC heartbeat received")
 
     return JSONResponse({
@@ -689,6 +706,197 @@ def strip_wikilinks(text):
     return text
 
 
+def _mark_runtime_activity(source: str = "runtime") -> None:
+    global _cadence_last_activity_ts
+    _cadence_last_activity_ts = time.time()
+    logger.debug(f"Cadence activity marked / 节奏活动已记录: {source}")
+
+
+def _cadence_recent_idle_seconds() -> float:
+    return max(0.0, time.time() - _cadence_last_activity_ts)
+
+
+def _cadence_is_night_window(now_cst: datetime) -> bool:
+    if CADENCE_NIGHT_START_HOUR < CADENCE_NIGHT_END_HOUR:
+        return CADENCE_NIGHT_START_HOUR <= now_cst.hour < CADENCE_NIGHT_END_HOUR
+    return now_cst.hour >= CADENCE_NIGHT_START_HOUR or now_cst.hour < CADENCE_NIGHT_END_HOUR
+
+
+def _cadence_bucket_text(bucket: dict) -> str:
+    meta = bucket.get("metadata", {})
+    fields = [
+        meta.get("name", ""),
+        " ".join(meta.get("domain", [])),
+        " ".join(meta.get("tags", [])),
+        bucket.get("content", ""),
+        bucket.get("path", ""),
+    ]
+    return " ".join(str(part) for part in fields).lower()
+
+
+def _cadence_bucket_has_any(bucket: dict, keywords: list[str]) -> bool:
+    haystack = _cadence_bucket_text(bucket)
+    return any(keyword.lower() in haystack for keyword in keywords)
+
+
+def _cadence_bucket_is_engineering(bucket: dict) -> bool:
+    return _cadence_bucket_has_any(
+        bucket,
+        [
+            "工程", "项目", "部署", "runtime", "repo", "docker", "zeabur",
+            "mcp", "server", "startup", "bridge", "cadence", "patch",
+            "debug", "fix", "build", "代码", "迁移", "配置",
+        ],
+    )
+
+
+def _cadence_bucket_is_pending(bucket: dict) -> bool:
+    return _cadence_bucket_has_any(
+        bucket,
+        [
+            "pending", "proposal", "todo", "next", "blocker", "风险",
+            "待做", "未落地", "未实现", "方案", "候选", "后续", "preflight",
+        ],
+    )
+
+
+def _cadence_bucket_is_landed(bucket: dict) -> bool:
+    meta = bucket.get("metadata", {})
+    if meta.get("resolved", False):
+        return True
+    return _cadence_bucket_has_any(
+        bucket,
+        [
+            "closeout", "closed", "resolved", "verified", "done", "completed",
+            "已完成", "已关闭", "已落地", "稳定", "完成", "修复完成",
+        ],
+    )
+
+
+def _cadence_bucket_is_life(bucket: dict) -> bool:
+    return _cadence_bucket_has_any(
+        bucket,
+        [
+            "日记", "diary", "daily", "生活", "早读", "morning", "情绪",
+            "陪伴", "关系", "天气", "房间", "今天", "昨天",
+        ],
+    )
+
+
+def _cadence_bucket_line(bucket: dict) -> str:
+    meta = bucket.get("metadata", {})
+    name = meta.get("name", bucket.get("id", "unknown"))
+    domains = ",".join(meta.get("domain", [])) or "未分类"
+    created = (meta.get("last_active") or meta.get("created") or "")[:16].replace("T", " ")
+    tags = ",".join(meta.get("tags", [])[:4])
+    snippet = strip_wikilinks(str(bucket.get("content", ""))).replace("\n", " ").strip()
+    snippet = snippet[:100] + ("…" if len(snippet) > 100 else "")
+    tag_part = f" | tags:{tags}" if tags else ""
+    return f"- {name} | {domains} | {created}{tag_part}\n  {snippet}"
+
+
+def _latest_cadence_drafts(limit: int = 5) -> list[str]:
+    if not os.path.isdir(CADENCE_DRAFT_DIR):
+        return []
+    files = [
+        os.path.join(CADENCE_DRAFT_DIR, name)
+        for name in os.listdir(CADENCE_DRAFT_DIR)
+        if name.endswith(".md")
+    ]
+    files.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+    return files[:limit]
+
+
+async def _run_cadence_pass(mode: str, reason: str = "manual") -> dict:
+    global _cadence_last_idle_run_ts, _cadence_last_night_run_date, _cadence_last_report
+
+    await decay_engine.ensure_started()
+    os.makedirs(CADENCE_DRAFT_DIR, exist_ok=True)
+
+    now_cst = datetime.now(CST)
+    buckets = await bucket_mgr.list_all(include_archive=False)
+    buckets.sort(
+        key=lambda bucket: bucket.get("metadata", {}).get("last_active")
+        or bucket.get("metadata", {}).get("created", ""),
+        reverse=True,
+    )
+
+    life_recent = [b for b in buckets if _cadence_bucket_is_life(b)][:4]
+    engineering_recent = [b for b in buckets if _cadence_bucket_is_engineering(b)]
+    pending = [b for b in engineering_recent if _cadence_bucket_is_pending(b)][:4]
+    landed = [b for b in engineering_recent if _cadence_bucket_is_landed(b)][:4]
+    workzone = [
+        b for b in engineering_recent
+        if not _cadence_bucket_is_pending(b) and not _cadence_bucket_is_landed(b)
+    ][:4]
+
+    if not life_recent:
+        life_recent = buckets[:3]
+
+    last_conclusion = _cadence_bucket_line(landed[0]) if landed else "暂无已落地结论。"
+    not_landed = [_cadence_bucket_line(b) for b in pending[:2]] or ["暂无明确未落地项。"]
+    quiet_minutes = round(_cadence_recent_idle_seconds() / 60, 1)
+    timestamp = now_cst.strftime("%Y%m%d_%H%M%S")
+    draft_path = os.path.join(CADENCE_DRAFT_DIR, f"{timestamp}_{mode}_draft.md")
+
+    report_lines = [
+        "---",
+        f"mode: {mode}",
+        f"reason: {reason}",
+        "status: draft_candidate_only",
+        "main_brain_write: false",
+        "auto_promotion: false",
+        "personality_boundary_mutation: false",
+        f"generated_at: {now_cst.isoformat()}",
+        "---",
+        "",
+        f"# OmbreBrain {mode.title()} Cadence Draft",
+        "",
+        "仅供次日复查，不自动写入主脑，不自动升格，不自动改人格边界。",
+        "",
+        "## 生活/日记连续性（优先）",
+        *[_cadence_bucket_line(bucket) for bucket in life_recent],
+        "",
+        "## 工程 workzone",
+        *([_cadence_bucket_line(bucket) for bucket in workzone] or ["- 暂无明显 active workzone。"]),
+        "",
+        "## Pending proposals",
+        *([_cadence_bucket_line(bucket) for bucket in pending] or ["- 暂无明显 pending proposal。"]),
+        "",
+        "## Landed references",
+        *([_cadence_bucket_line(bucket) for bucket in landed] or ["- 暂无明显 landed reference。"]),
+        "",
+        "## Minimal handoff",
+        f"- quiet_minutes: {quiet_minutes}",
+        f"- latest_settled_conclusion: {last_conclusion}",
+        f"- not_yet_landed: {' | '.join(not_landed)}",
+        "- note: 工程信息仅作辅助，不默认压过生活/日记连续性。",
+    ]
+
+    with open(draft_path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(report_lines) + "\n")
+
+    if mode == "idle":
+        _cadence_last_idle_run_ts = time.time()
+    if mode == "night":
+        _cadence_last_night_run_date = now_cst.strftime("%Y-%m-%d")
+
+    _cadence_last_report = {
+        "mode": mode,
+        "reason": reason,
+        "generated_at": now_cst.isoformat(),
+        "path": draft_path,
+        "quiet_minutes": quiet_minutes,
+        "life_count": len(life_recent),
+        "workzone_count": len(workzone),
+        "pending_count": len(pending),
+        "landed_count": len(landed),
+        "draft_only": True,
+    }
+    logger.info(f"Cadence draft generated / 节奏草稿已生成: {draft_path}")
+    return dict(_cadence_last_report)
+
+
 # ============================================================
 # Tool: dream - V1.2 graft minimal
 # 工具：dream - V1.2 中合并低风险版
@@ -696,6 +904,7 @@ def strip_wikilinks(text):
 @mcp.tool()
 async def dream() -> str:
     """做梦：读取最近新增的动态记忆，供第一人称自省。不读取 pinned / permanent / feel。"""
+    _mark_runtime_activity("dream")
     await decay_engine.ensure_started()
 
     try:
@@ -758,6 +967,7 @@ async def breath(
     arousal: float = -1,
 ) -> str:
     """检索记忆或浮现未解决记忆。query 为空时自动推送权重最高的未解决桶；有 query 时按关键词+情感检索。domain 逗号分隔，valence/arousal 传 0~1 启用情感共鸣，-1 忽略。"""
+    _mark_runtime_activity("breath")
     await decay_engine.ensure_started()
 
     # --- 注入当前北京时间 / Inject current Beijing time ---
@@ -1098,6 +1308,7 @@ async def hold(
     location: 可选，地点（如"家里客厅"、"办公室"）
     atmosphere: 可选，氛围（如"温暖安静"、"紧张"）
     """
+    _mark_runtime_activity("hold")
     await decay_engine.ensure_started()
 
     # --- Input validation / 输入校验 ---
@@ -1170,6 +1381,7 @@ async def hold(
 @mcp.tool()
 async def grow(content: str) -> str:
     """日记归档。自动拆分长内容为多个记忆桶。"""
+    _mark_runtime_activity("grow")
     await decay_engine.ensure_started()
 
     if not content or not content.strip():
@@ -1245,6 +1457,7 @@ async def trace(
     delete: bool = False,
 ) -> str:
     """修改记忆元数据。resolved=1 标记已解决（桶权重骤降沉底），resolved=0 重新激活，pinned=1 钉选，digested=1 标记已消化，delete=True 删除桶。其余字段只传需改的，-1 或空串表示不改。"""
+    _mark_runtime_activity("trace")
 
     if not bucket_id or not bucket_id.strip():
         return "请提供有效的 bucket_id。"
@@ -1306,6 +1519,7 @@ async def trace(
 @mcp.tool()
 async def pulse(include_archive: bool = False) -> str:
     """系统状态和所有记忆桶摘要。include_archive=True 时包含归档桶。"""
+    _mark_runtime_activity("pulse")
     try:
         stats = await bucket_mgr.get_stats()
     except Exception as e:
@@ -2112,6 +2326,7 @@ async def api_test_dream(request):
 @mcp.custom_route("/api/startup-bridge", methods=["GET"])
 async def api_startup_bridge(request):
     scene = request.query_params.get("scene", "outside_daily_window")
+    _mark_runtime_activity(f"startup_bridge:{scene}")
     result = await startup_bridge(scene=scene)
     return Response(str({"result": result}), media_type="application/json")
 
@@ -2219,6 +2434,64 @@ _OMBRE_READONLY_WRAPPERS = {
 }
 
 
+@mcp.custom_route("/api/cadence/status", methods=["GET"])
+async def api_cadence_status(request):
+    from starlette.responses import JSONResponse
+
+    latest = _latest_cadence_drafts()
+    return JSONResponse({
+        "enabled": CADENCE_ENABLED,
+        "draft_dir": CADENCE_DRAFT_DIR,
+        "idle_minutes": CADENCE_IDLE_MINUTES,
+        "night_window": [CADENCE_NIGHT_START_HOUR, CADENCE_NIGHT_END_HOUR],
+        "night_min_idle_minutes": CADENCE_NIGHT_MIN_IDLE_MINUTES,
+        "last_activity_age_seconds": round(_cadence_recent_idle_seconds(), 1),
+        "last_idle_run_ts": _cadence_last_idle_run_ts,
+        "last_night_run_date": _cadence_last_night_run_date,
+        "last_report": _cadence_last_report,
+        "latest_drafts": latest,
+        "draft_only": True,
+        "main_brain_write": False,
+    })
+
+
+@mcp.custom_route("/api/cadence/run", methods=["GET", "POST"])
+async def api_cadence_run(request):
+    from starlette.responses import JSONResponse
+
+    mode = (request.query_params.get("mode", "idle") or "idle").strip().lower()
+    if mode not in ("idle", "night"):
+        return JSONResponse({"error": "mode must be idle or night"}, status_code=400)
+
+    _mark_runtime_activity(f"cadence_manual_{mode}")
+    result = await _run_cadence_pass(mode=mode, reason="manual_route")
+    return JSONResponse(result)
+
+
+async def _dual_cadence_loop():
+    await asyncio.sleep(20)
+    while True:
+        try:
+            if CADENCE_ENABLED:
+                now_cst = datetime.now(CST)
+                quiet_seconds = _cadence_recent_idle_seconds()
+                if (
+                    _cadence_is_night_window(now_cst)
+                    and quiet_seconds >= (CADENCE_NIGHT_MIN_IDLE_MINUTES * 60)
+                    and _cadence_last_night_run_date != now_cst.strftime("%Y-%m-%d")
+                ):
+                    await _run_cadence_pass(mode="night", reason="night_window")
+                elif (
+                    quiet_seconds >= (CADENCE_IDLE_MINUTES * 60)
+                    and _cadence_last_idle_run_ts < _cadence_last_activity_ts
+                ):
+                    await _run_cadence_pass(mode="idle", reason="idle_window")
+        except Exception as e:
+            logger.warning(f"Dual cadence loop skipped / 双节奏循环跳过: {e}")
+
+        await asyncio.sleep(CADENCE_CHECK_INTERVAL_SECONDS)
+
+
 # --- Entry point / 启动入口 ---
 if __name__ == "__main__":
     transport = config.get("transport", "stdio")
@@ -2261,6 +2534,14 @@ if __name__ == "__main__":
 
         t = threading.Thread(target=_start_keepalive, daemon=True)
         t.start()
+
+    if transport in ("sse", "streamable-http") and CADENCE_ENABLED:
+        def _start_dual_cadence():
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(_dual_cadence_loop())
+
+        cadence_thread = threading.Thread(target=_start_dual_cadence, daemon=True)
+        cadence_thread.start()
 
     mcp.run(transport=transport)
 
