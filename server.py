@@ -461,6 +461,7 @@ async def api_status(request):
     global _cc_last_heartbeat
     if request.method == "POST":
         _cc_last_heartbeat = time.time()
+        _mark_system_event("api_status_heartbeat")
         logger.info("CC heartbeat received")
 
     return JSONResponse({
@@ -592,6 +593,7 @@ async def api_post(request):
     sender = body.get("sender", "自动化脚本")
     to = body.get("to", "")
 
+    _mark_runtime_activity("api_post")
     note = _save_note(content, sender, to)
 
     # Auto-reply only if CC is offline
@@ -757,6 +759,10 @@ def _mark_runtime_activity(source: str = "runtime") -> None:
     logger.debug(f"Cadence activity marked / 节奏活动已记录: {source}")
 
 
+def _mark_system_event(source: str = "system") -> None:
+    logger.debug(f"Cadence system event ignored for idle gate / 系统事件不计入空闲门: {source}")
+
+
 def _cadence_recent_idle_seconds() -> float:
     return max(0.0, time.time() - _cadence_last_activity_ts)
 
@@ -840,6 +846,17 @@ def _cadence_bucket_line(bucket: dict) -> str:
     return f"- {name} | {domains} | {created}{tag_part}\n  {snippet}"
 
 
+def _cadence_idle_gate_open(mode: str, now_cst: datetime | None = None) -> bool:
+    quiet_seconds = _cadence_recent_idle_seconds()
+    if mode == "night":
+        now_cst = now_cst or datetime.now(CST)
+        return (
+            _cadence_is_night_window(now_cst)
+            and quiet_seconds >= (CADENCE_NIGHT_MIN_IDLE_MINUTES * 60)
+        )
+    return quiet_seconds >= (CADENCE_IDLE_MINUTES * 60)
+
+
 def _latest_cadence_drafts(limit: int = 5) -> list[str]:
     if not os.path.isdir(CADENCE_DRAFT_DIR):
         return []
@@ -856,14 +873,24 @@ async def _run_cadence_deepseek_candidate(
     *,
     mode: str,
     reason: str,
-    draft_text: str,
     now_cst: datetime,
     timestamp: str,
+    quiet_minutes: float,
+    draft_path: str,
 ) -> dict:
     if not CADENCE_DEEPSEEK_ENABLED:
         return {"enabled": False, "called": False, "reason": "env_flag_disabled"}
+    if not _cadence_idle_gate_open(mode, now_cst):
+        return {"enabled": True, "called": False, "reason": "idle_gate_closed"}
+    if not os.path.isfile(draft_path):
+        return {"enabled": True, "called": False, "reason": "draft_missing"}
     if not getattr(dehydrator, "client", None):
         return {"enabled": True, "called": False, "reason": "api_client_unavailable"}
+
+    with open(draft_path, "r", encoding="utf-8") as handle:
+        draft_text = handle.read().strip()
+    if not draft_text:
+        return {"enabled": True, "called": False, "reason": "draft_empty"}
 
     candidate_path = os.path.join(CADENCE_DRAFT_DIR, f"{timestamp}_{mode}_deepseek_candidate.md")
     bounded_input = draft_text[:CADENCE_DEEPSEEK_MAX_INPUT_CHARS]
@@ -990,9 +1017,10 @@ async def _run_cadence_pass(mode: str, reason: str = "manual") -> dict:
         deepseek_result = await _run_cadence_deepseek_candidate(
             mode=mode,
             reason=reason,
-            draft_text="\n".join(report_lines),
             now_cst=now_cst,
             timestamp=timestamp,
+            quiet_minutes=quiet_minutes,
+            draft_path=draft_path,
         )
     except Exception as e:
         deepseek_result = {"enabled": CADENCE_DEEPSEEK_ENABLED, "called": False, "reason": f"error:{e}"}
@@ -1818,6 +1846,7 @@ async def post(
     if not content or not content.strip():
         return "便利贴内容为空。"
 
+    _mark_runtime_activity("post")
     note = _save_note(content, sender, to)
 
     # Auto-reply only if CC is offline
@@ -2439,6 +2468,7 @@ async def post(content: str, sender: str = "YC", to: str = "") -> str:
     import uuid
     from datetime import datetime
 
+    _mark_runtime_activity("bridge_post")
     item = {
         "id": uuid.uuid4().hex[:12],
         "content": content,
@@ -2630,9 +2660,9 @@ async def api_test_peek(request):
 def _register_ombre_readonly_tool(tool_name: str, tool_func):
     @mcp.tool(name=tool_name)
     async def _readonly_wrapper(arg: str = "") -> dict:
-        if tool_name == "ombre.handoff.pr2.read":
+        if tool_name == "ombre_handoff_pr2_read":
             return tool_func(arg or "both")
-        if tool_name in ("ombre.reference.read", "ombre.intake.batch.read"):
+        if tool_name in ("ombre_reference_read", "ombre_intake_batch_read"):
             return tool_func(arg)
         return tool_func()
 
