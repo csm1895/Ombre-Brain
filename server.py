@@ -116,6 +116,8 @@ CADENCE_NIGHT_START_HOUR = max(0, min(23, int(os.environ.get("OMBRE_NIGHT_CADENC
 CADENCE_NIGHT_END_HOUR = max(1, min(24, int(os.environ.get("OMBRE_NIGHT_CADENCE_END_HOUR", "6"))))
 CADENCE_NIGHT_MIN_IDLE_MINUTES = max(30, int(os.environ.get("OMBRE_NIGHT_MIN_IDLE_MINUTES", "90")))
 CADENCE_CHECK_INTERVAL_SECONDS = max(120, int(os.environ.get("OMBRE_CADENCE_CHECK_INTERVAL_SECONDS", "300")))
+CADENCE_DEEPSEEK_ENABLED = os.environ.get("OMBRE_CADENCE_DEEPSEEK_ENABLED", "0").lower() in ("1", "true", "yes")
+CADENCE_DEEPSEEK_MAX_INPUT_CHARS = max(1500, int(os.environ.get("OMBRE_CADENCE_DEEPSEEK_MAX_INPUT_CHARS", "6000")))
 _cadence_last_activity_ts = time.time()
 _cadence_last_idle_run_ts = 0.0
 _cadence_last_night_run_date = ""
@@ -459,7 +461,6 @@ async def api_status(request):
     global _cc_last_heartbeat
     if request.method == "POST":
         _cc_last_heartbeat = time.time()
-        _mark_runtime_activity("api_status_heartbeat")
         logger.info("CC heartbeat received")
 
     return JSONResponse({
@@ -851,6 +852,70 @@ def _latest_cadence_drafts(limit: int = 5) -> list[str]:
     return files[:limit]
 
 
+async def _run_cadence_deepseek_candidate(
+    *,
+    mode: str,
+    reason: str,
+    draft_text: str,
+    now_cst: datetime,
+    timestamp: str,
+) -> dict:
+    if not CADENCE_DEEPSEEK_ENABLED:
+        return {"enabled": False, "called": False, "reason": "env_flag_disabled"}
+    if not getattr(dehydrator, "client", None):
+        return {"enabled": True, "called": False, "reason": "api_client_unavailable"}
+
+    candidate_path = os.path.join(CADENCE_DRAFT_DIR, f"{timestamp}_{mode}_deepseek_candidate.md")
+    bounded_input = draft_text[:CADENCE_DEEPSEEK_MAX_INPUT_CHARS]
+    system_prompt = (
+        "You are generating an OmbreBrain cadence candidate draft.\n"
+        "Draft only. Never write main brain facts. Never promote to core/recent. "
+        "Never create iron rules, redlines, or personality boundary mutations.\n"
+        "Preserve uncertainty. Keep life/diary continuity primary; engineering only supportive.\n"
+        "Output concise markdown only."
+    )
+    user_prompt = (
+        f"pass_type={mode}\n"
+        f"reason={reason}\n"
+        "write_scope=draft_only\n"
+        "status=candidate\n"
+        "source=cadence_deepseek\n\n"
+        "Below is the bounded local cadence draft source. Rewrite it into a cleaner candidate note "
+        "for next-day review. Do not invent facts, do not issue commands, do not claim any main-brain write.\n\n"
+        f"{bounded_input}"
+    )
+    response = await dehydrator.client.chat.completions.create(
+        model=dehydrator.model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        max_tokens=min(1200, getattr(dehydrator, "max_tokens", 1024)),
+        temperature=min(0.3, getattr(dehydrator, "temperature", 0.1)),
+    )
+    content = ""
+    if response.choices:
+        content = response.choices[0].message.content or ""
+    candidate_lines = [
+        "---",
+        "source: cadence_deepseek",
+        f"pass_type: {mode}",
+        "status: candidate",
+        "write_scope: draft_only",
+        "main_brain_write: false",
+        "auto_promotion: false",
+        "personality_boundary_mutation: false",
+        f"generated_at: {now_cst.isoformat()}",
+        "---",
+        "",
+        content.strip() or "_DeepSeek returned empty content._",
+        "",
+    ]
+    with open(candidate_path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(candidate_lines))
+    return {"enabled": True, "called": True, "path": candidate_path}
+
+
 async def _run_cadence_pass(mode: str, reason: str = "manual") -> dict:
     global _cadence_last_idle_run_ts, _cadence_last_night_run_date, _cadence_last_report
 
@@ -920,6 +985,19 @@ async def _run_cadence_pass(mode: str, reason: str = "manual") -> dict:
     with open(draft_path, "w", encoding="utf-8") as handle:
         handle.write("\n".join(report_lines) + "\n")
 
+    deepseek_result = {"enabled": CADENCE_DEEPSEEK_ENABLED, "called": False, "reason": "not_attempted"}
+    try:
+        deepseek_result = await _run_cadence_deepseek_candidate(
+            mode=mode,
+            reason=reason,
+            draft_text="\n".join(report_lines),
+            now_cst=now_cst,
+            timestamp=timestamp,
+        )
+    except Exception as e:
+        deepseek_result = {"enabled": CADENCE_DEEPSEEK_ENABLED, "called": False, "reason": f"error:{e}"}
+        logger.warning(f"Cadence DeepSeek candidate skipped / 节奏 DeepSeek 候选跳过: {e}")
+
     if mode == "idle":
         _cadence_last_idle_run_ts = time.time()
     if mode == "night":
@@ -936,6 +1014,7 @@ async def _run_cadence_pass(mode: str, reason: str = "manual") -> dict:
         "pending_count": len(pending),
         "landed_count": len(landed),
         "draft_only": True,
+        "deepseek_candidate": deepseek_result,
     }
     logger.info(f"Cadence draft generated / 节奏草稿已生成: {draft_path}")
     return dict(_cadence_last_report)
