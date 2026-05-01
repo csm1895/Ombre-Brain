@@ -877,10 +877,11 @@ async def _run_cadence_deepseek_candidate(
     timestamp: str,
     quiet_minutes: float,
     draft_path: str,
+    force_deepseek: bool = False,
 ) -> dict:
-    if not CADENCE_DEEPSEEK_ENABLED:
+    if not (CADENCE_DEEPSEEK_ENABLED or force_deepseek):
         return {"enabled": False, "called": False, "reason": "env_flag_disabled"}
-    if not _cadence_idle_gate_open(mode, now_cst):
+    if not force_deepseek and not _cadence_idle_gate_open(mode, now_cst):
         return {"enabled": True, "called": False, "reason": "idle_gate_closed"}
     if not os.path.isfile(draft_path):
         return {"enabled": True, "called": False, "reason": "draft_missing"}
@@ -943,7 +944,7 @@ async def _run_cadence_deepseek_candidate(
     return {"enabled": True, "called": True, "path": candidate_path}
 
 
-async def _run_cadence_pass(mode: str, reason: str = "manual") -> dict:
+async def _run_cadence_pass(mode: str, reason: str = "manual", force_deepseek: bool = False) -> dict:
     global _cadence_last_idle_run_ts, _cadence_last_night_run_date, _cadence_last_report
 
     await decay_engine.ensure_started()
@@ -1012,7 +1013,7 @@ async def _run_cadence_pass(mode: str, reason: str = "manual") -> dict:
     with open(draft_path, "w", encoding="utf-8") as handle:
         handle.write("\n".join(report_lines) + "\n")
 
-    deepseek_result = {"enabled": CADENCE_DEEPSEEK_ENABLED, "called": False, "reason": "not_attempted"}
+    deepseek_result = {"enabled": (CADENCE_DEEPSEEK_ENABLED or force_deepseek), "called": False, "reason": "not_attempted"}
     try:
         deepseek_result = await _run_cadence_deepseek_candidate(
             mode=mode,
@@ -1021,9 +1022,10 @@ async def _run_cadence_pass(mode: str, reason: str = "manual") -> dict:
             timestamp=timestamp,
             quiet_minutes=quiet_minutes,
             draft_path=draft_path,
+            force_deepseek=force_deepseek,
         )
     except Exception as e:
-        deepseek_result = {"enabled": CADENCE_DEEPSEEK_ENABLED, "called": False, "reason": f"error:{e}"}
+        deepseek_result = {"enabled": (CADENCE_DEEPSEEK_ENABLED or force_deepseek), "called": False, "reason": f"error:{e}"}
         logger.warning(f"Cadence DeepSeek candidate skipped / 节奏 DeepSeek 候选跳过: {e}")
 
     if mode == "idle":
@@ -1042,6 +1044,7 @@ async def _run_cadence_pass(mode: str, reason: str = "manual") -> dict:
         "pending_count": len(pending),
         "landed_count": len(landed),
         "draft_only": True,
+        "force_deepseek": force_deepseek,
         "deepseek_candidate": deepseek_result,
     }
     logger.info(f"Cadence draft generated / 节奏草稿已生成: {draft_path}")
@@ -2701,11 +2704,17 @@ async def api_cadence_run(request):
     from starlette.responses import JSONResponse
 
     mode = (request.query_params.get("mode", "idle") or "idle").strip().lower()
+    force = (request.query_params.get("force", "0") or "0").strip().lower() in ("1", "true", "yes")
     if mode not in ("idle", "night"):
         return JSONResponse({"error": "mode must be idle or night"}, status_code=400)
 
-    _mark_runtime_activity(f"cadence_manual_{mode}")
-    result = await _run_cadence_pass(mode=mode, reason="manual_route")
+    if not force:
+        _mark_runtime_activity(f"cadence_manual_{mode}")
+    result = await _run_cadence_pass(
+        mode=mode,
+        reason="manual_force_route" if force else "manual_route",
+        force_deepseek=force,
+    )
     return JSONResponse(result)
 
 
