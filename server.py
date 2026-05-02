@@ -2023,6 +2023,9 @@ async def write_diary_draft(content: str) -> str:
                 "layer": "diary_draft",
                 "status": "pending_review",
                 "route": "night_clean_queue",
+                "first_person_preferred": True,
+                "tail_context_allowed": True,
+                "tail_context_max_items": 3,
             },
             fallback_name="日记草稿",
         )
@@ -2050,6 +2053,9 @@ async def enqueue_night_clean_input(content: str) -> str:
                 "status": "pending",
                 "route": "night_clean_queue",
                 "priority_label": "low",
+                "first_person_preferred": True,
+                "tail_context_allowed": True,
+                "tail_context_max_items": 3,
             },
             fallback_name="夜间整理输入",
         )
@@ -2076,6 +2082,8 @@ async def write_project_workzone_update(content: str, type: str = "workzone") ->
         "layer": "engineering_workzone" if normalized == "workzone" else "pending_proposal",
         "status": "active" if normalized == "workzone" else "not_landed",
         "route": "project_workzone" if normalized == "workzone" else "pending_proposal",
+        "tail_context_allowed": True,
+        "tail_context_max_items": 3,
     }
     fallback_name = "工程进度" if normalized == "workzone" else "待定方案"
 
