@@ -116,6 +116,10 @@ CADENCE_LOG_PATH = os.environ.get(
     "OMBRE_CADENCE_LOG_PATH",
     os.path.join(CADENCE_DRAFT_DIR, "cadence_run.log"),
 )
+ZEABUR_CONTAINER_LOG_PATH = os.environ.get(
+    "OMBRE_ZEABUR_CONTAINER_LOG_PATH",
+    "/app/logs/zeabur_container.log",
+)
 CADENCE_DREAM_DIR = os.environ.get(
     "OMBRE_CADENCE_DREAM_DIR",
     os.path.join(CADENCE_DRAFT_DIR, "dreams"),
@@ -2783,13 +2787,17 @@ async def reject_diary_review(review_id: str, reason: str = "") -> str:
 
 
 @mcp.tool()
-async def check_logs(lines: int = 50) -> str:
+async def check_logs(lines: int = 50, source: str = "all") -> str:
     """
     读取最近的运行日志，自检系统状态。
     lines: 返回最近多少行日志，默认50行。
+    source: all/cadence/zeabur/system，默认all。
     """
     import subprocess
     now_cst = datetime.now(CST)
+    source = (source or "all").strip().lower()
+    if source not in ("all", "cadence", "zeabur", "system"):
+        return "source 只支持 all / cadence / zeabur / system。"
     receipt_summary = _read_latest_cadence_receipt_summary()
     latest_draft = (_latest_cadence_drafts(limit=1) or [""])[0]
 
@@ -2815,11 +2823,20 @@ async def check_logs(lines: int = 50) -> str:
     log_sources = []
 
     # 0. 优先读取 cadence 真实运行日志（DeepSeek night/idle）
-    if os.path.exists(CADENCE_LOG_PATH):
+    if source in ("all", "cadence") and os.path.exists(CADENCE_LOG_PATH):
         try:
             cadence_tail = _tail_text_file(CADENCE_LOG_PATH, lines)
             if cadence_tail:
                 log_sources.append(f"📄 cadence运行日志 {CADENCE_LOG_PATH}:\n{cadence_tail}")
+        except Exception:
+            pass
+
+    # 0.5 读取容器 stdout/stderr 镜像日志（Zeabur 平台日志本地副本）
+    if source in ("all", "zeabur") and os.path.exists(ZEABUR_CONTAINER_LOG_PATH):
+        try:
+            zeabur_tail = _tail_text_file(ZEABUR_CONTAINER_LOG_PATH, lines)
+            if zeabur_tail:
+                log_sources.append(f"📄 Zeabur容器日志 {ZEABUR_CONTAINER_LOG_PATH}:\n{zeabur_tail}")
         except Exception:
             pass
     
@@ -2830,7 +2847,7 @@ async def check_logs(lines: int = 50) -> str:
         "/tmp/ombre_brain.log",
     ]
     
-    for log_path in log_paths:
+    for log_path in ([] if source in ("cadence", "zeabur") else log_paths):
         if os.path.exists(log_path):
             try:
                 result = subprocess.run(
@@ -2854,7 +2871,7 @@ async def check_logs(lines: int = 50) -> str:
                 f"记忆桶总数: {stats['dynamic_count'] + stats['permanent_count'] + stats['iron_rule_count']}\n"
                 f"衰减引擎: {'运行中' if decay_engine.is_running else '已停止'}\n\n"
                 f"{_cadence_observability_text()}\n"
-                f"💡 提示：Zeabur容器环境日志通过平台界面查看更完整。"
+                f"💡 提示：source=zeabur 可读取容器 stdout/stderr 本地副本。"
             )
         except Exception as e:
             return f"获取系统状态失败: {e}"
@@ -3214,6 +3231,19 @@ async def api_cadence_run(request):
         force_deepseek=force,
     )
     return JSONResponse(result)
+
+
+@mcp.custom_route("/api/logs", methods=["GET"])
+async def api_logs(request):
+    from starlette.responses import PlainTextResponse
+
+    source = request.query_params.get("source", "all")
+    try:
+        lines = int(request.query_params.get("lines", "50"))
+    except ValueError:
+        lines = 50
+    result = await check_logs(lines=lines, source=source)
+    return PlainTextResponse(result)
 
 
 async def _dual_cadence_loop():

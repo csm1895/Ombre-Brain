@@ -27,4 +27,4 @@ ENV OMBRE_TRANSPORT=streamable-http
 
 EXPOSE 8000
 
-CMD ["python", "server.py"]
+CMD ["python", "start_zeabur.py"]
