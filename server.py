@@ -132,6 +132,15 @@ CADENCE_RECEIPT_DIR = os.environ.get(
     "OMBRE_CADENCE_RECEIPT_DIR",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "cadence_receipts"),
 )
+TAIL_CONTEXT_DIR = os.environ.get(
+    "OMBRE_TAIL_CONTEXT_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "runtime_context"),
+)
+TAIL_CONTEXT_PATH = os.environ.get(
+    "OMBRE_TAIL_CONTEXT_PATH",
+    os.path.join(TAIL_CONTEXT_DIR, "latest_tail_context.md"),
+)
+TAIL_CONTEXT_MAX_MESSAGES = max(1, int(os.environ.get("OMBRE_TAIL_CONTEXT_MAX_MESSAGES", "20")))
 CADENCE_IDLE_MINUTES = max(60, int(os.environ.get("OMBRE_IDLE_CADENCE_MINUTES", "120")))
 CADENCE_NIGHT_START_HOUR = max(0, min(23, int(os.environ.get("OMBRE_NIGHT_CADENCE_START_HOUR", "1"))))
 CADENCE_NIGHT_END_HOUR = max(1, min(24, int(os.environ.get("OMBRE_NIGHT_CADENCE_END_HOUR", "6"))))
@@ -215,6 +224,72 @@ async def _wait_for_runtime_ready(max_wait_seconds: float = 2.0) -> tuple[bool, 
         await asyncio.sleep(min(0.2 * attempt, 0.8))
 
     return False, last_error or "runtime warm-up timeout"
+
+
+def _normalize_tail_context(raw_text: str, max_messages: int = TAIL_CONTEXT_MAX_MESSAGES) -> list[str]:
+    text = (raw_text or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            items = []
+            for item in parsed:
+                if isinstance(item, dict):
+                    role = str(item.get("role") or item.get("speaker") or "unknown").strip()
+                    content = str(item.get("content") or item.get("text") or "").strip()
+                    if content:
+                        items.append(f"{role}: {content}")
+                else:
+                    item_text = str(item).strip()
+                    if item_text:
+                        items.append(item_text)
+            return items[-max_messages:]
+    except Exception:
+        pass
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return lines[-max_messages:]
+
+
+def _save_tail_context_text(raw_text: str, window_id: str = "", max_messages: int = TAIL_CONTEXT_MAX_MESSAGES) -> dict:
+    items = _normalize_tail_context(raw_text, max_messages=max_messages)
+    if not items:
+        return {"saved": False, "reason": "empty_tail_context"}
+    os.makedirs(os.path.dirname(TAIL_CONTEXT_PATH), exist_ok=True)
+    now_cst = datetime.now(CST)
+    content = [
+        "---",
+        "source: previous_window_tail",
+        "storage: latest_only",
+        "read_only: true",
+        "decay_participation: false",
+        f"window_id: {window_id.strip() if window_id else ''}",
+        f"saved_at: {now_cst.isoformat()}",
+        f"message_count: {len(items)}",
+        "---",
+        "",
+        "上一窗口尾部原文（只读，不参与海马体衰减）：",
+        "",
+        *[f"- {item}" for item in items],
+        "",
+    ]
+    with open(TAIL_CONTEXT_PATH, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(content))
+    return {"saved": True, "path": TAIL_CONTEXT_PATH, "message_count": len(items)}
+
+
+def _read_tail_context_section() -> str:
+    if not os.path.isfile(TAIL_CONTEXT_PATH):
+        return "=== 上一窗口尾部上下文 ===\n暂无上一窗口尾部原文。\n"
+    try:
+        text = _tail_text_file(TAIL_CONTEXT_PATH, 80).strip()
+    except Exception as e:
+        return f"=== 上一窗口尾部上下文 ===\n读取失败: {e}\n"
+    if text.startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) == 3:
+            text = parts[2].strip()
+    return "=== 上一窗口尾部上下文 ===\n" + (text or "暂无上一窗口尾部原文。") + "\n"
 
 
 # Note expiry times (seconds) by category
@@ -1166,6 +1241,10 @@ async def _run_cadence_deepseek_candidate(
         "Draft only. Never write main brain facts. Never promote to core/recent. "
         "Never create iron rules, redlines, or personality boundary mutations.\n"
         "Preserve uncertainty. Keep life/diary continuity primary; engineering only supportive.\n"
+        "Write diary-like material strictly in first person as 顾砚深: use 我, 我和她, 她. "
+        "Do not say AI, user, assistant, the user, or third-person summaries when describing the relationship.\n"
+        "The candidate must include: relationship state, emotional movement, unfinished topics, "
+        "my judgment at the time, and her state.\n"
         "Output concise markdown only."
     )
     user_prompt = (
@@ -1175,7 +1254,9 @@ async def _run_cadence_deepseek_candidate(
         "status=candidate\n"
         "source=cadence_deepseek\n\n"
         "Below is the bounded local cadence draft source. Rewrite it into a cleaner candidate note "
-        "for next-day review. Do not invent facts, do not issue commands, do not claim any main-brain write.\n\n"
+        "for next-day review. Use first person as 顾砚深, with 我/我和她/她 as the relationship frame. "
+        "Include relationship state, emotional movement, unfinished topics, my judgment at the time, and her state. "
+        "Do not invent facts, do not issue commands, do not claim any main-brain write.\n\n"
         f"{bounded_input}"
     )
     response = await dehydrator.client.chat.completions.create(
@@ -1778,12 +1859,13 @@ async def startup_bridge(scene: str = "outside_daily_window") -> str:
         "- if recall feels thin, use pulse() next\n"
         "- if retrieval is still thin, use the startup payload / fallback summary\n"
         "- do not ask the user to resend tutorials first\n\n"
-        "=== Live Recall ===\n"
     )
+    tail_section = _read_tail_context_section() + "\n=== Live Recall ===\n"
     ready, ready_error = await _wait_for_runtime_ready(max_wait_seconds=2.5)
     if not ready:
         return (
             header
+            + tail_section
             + "Runtime warm-up is still in progress.\n"
             + "Startup bridge reached hippocampus, but the first hop is not ready yet.\n"
             + f"detail: {ready_error or 'runtime warm-up timeout'}\n"
@@ -1794,7 +1876,7 @@ async def startup_bridge(scene: str = "outside_daily_window") -> str:
     for attempt in range(3):
         try:
             recall = await breath(query="", max_results=3)
-            return header + recall
+            return header + tail_section + recall
         except Exception as e:
             last_error = str(e)
             logger.warning(
@@ -1805,9 +1887,30 @@ async def startup_bridge(scene: str = "outside_daily_window") -> str:
 
     return (
         header
+        + tail_section
         + "Startup bridge reached hippocampus, but live recall is temporarily unavailable.\n"
         + f"detail: {last_error or 'unknown startup recall failure'}\n"
         + "Use pulse() or retry shortly. Do not pretend recall already succeeded."
+    )
+
+
+@mcp.tool()
+async def save_tail_context(messages: str, window_id: str = "", max_messages: int = TAIL_CONTEXT_MAX_MESSAGES) -> str:
+    """保存上一窗口最后N条原文。只保留最近一个窗口尾巴，不写记忆桶，不参与衰减。"""
+    _mark_runtime_activity("save_tail_context")
+    result = _save_tail_context_text(
+        messages,
+        window_id=window_id,
+        max_messages=max(1, min(50, int(max_messages))),
+    )
+    if not result.get("saved"):
+        return f"尾部上下文未保存: {result.get('reason', 'unknown')}"
+    return (
+        "尾部上下文已保存（latest-only，会覆盖上一份）。\n"
+        f"path: {result.get('path')}\n"
+        f"message_count: {result.get('message_count')}\n"
+        "main_brain_write: false\n"
+        "decay_participation: false"
     )
 
 
@@ -2157,6 +2260,7 @@ async def pulse(include_archive: bool = False) -> str:
         f"总存储大小: {stats['total_size_kb']:.1f} KB\n"
         f"衰减引擎: {'运行中' if decay_engine.is_running else '已停止'}\n"
     )
+    tail_section = "\n" + _read_tail_context_section()
 
     # --- List all bucket summaries / 列出所有桶摘要 ---
     try:
@@ -2165,7 +2269,7 @@ async def pulse(include_archive: bool = False) -> str:
         return status + f"\n列出记忆桶失败: {e}"
 
     if not buckets:
-        return status + "\n记忆库为空。"
+        return status + tail_section + "\n记忆库为空。"
 
     lines = []
     for b in buckets:
@@ -2210,7 +2314,7 @@ async def pulse(include_archive: bool = False) -> str:
             f"标签:{','.join(meta.get('tags', []))}"
         )
 
-    return status + "\n=== 记忆列表 ===\n" + "\n".join(lines)
+    return status + tail_section + "\n=== 记忆列表 ===\n" + "\n".join(lines)
 
 
 # =============================================================
@@ -3086,6 +3190,30 @@ async def api_startup_bridge(request):
     _mark_runtime_activity(f"startup_bridge:{scene}")
     result = await startup_bridge(scene=scene)
     return Response(str({"result": result}), media_type="application/json")
+
+
+@mcp.custom_route("/api/tail-context", methods=["GET", "POST"])
+async def api_tail_context(request):
+    from starlette.responses import JSONResponse
+
+    if request.method == "GET":
+        return JSONResponse({
+            "path": TAIL_CONTEXT_PATH,
+            "content": _read_tail_context_section(),
+            "latest_only": True,
+            "main_brain_write": False,
+            "decay_participation": False,
+        })
+    body = await request.json()
+    messages = body.get("messages", "")
+    if not isinstance(messages, str):
+        messages = json.dumps(messages, ensure_ascii=False)
+    result = _save_tail_context_text(
+        messages,
+        window_id=str(body.get("window_id", "")),
+        max_messages=max(1, min(50, int(body.get("max_messages", TAIL_CONTEXT_MAX_MESSAGES)))),
+    )
+    return JSONResponse(result)
 
 
 def _api_notes_file():
