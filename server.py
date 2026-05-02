@@ -3507,6 +3507,85 @@ async def api_latest_deepseek_attribution(request):
     })
 
 
+@mcp.custom_route("/api/browser-bridge/status", methods=["GET"])
+async def api_browser_bridge_status(request):
+    from starlette.responses import JSONResponse
+
+    host = os.environ.get("OMBRE_BROWSER_MCP_TAILSCALE_IP", "").strip()
+    port = os.environ.get("OMBRE_BROWSER_MCP_PORT", "3001").strip()
+    return JSONResponse({
+        "configured": bool(host),
+        "target": f"http://{host}:{port}" if host else "",
+        "public_sse_path": "/browser-sse/sse",
+        "tailscale_auth_configured": bool(os.environ.get("TS_AUTHKEY") or os.environ.get("TAILSCALE_AUTHKEY")),
+        "proxy_mode": "app_route_proxy",
+    })
+
+
+async def _browser_mcp_proxy(request, path: str):
+    from starlette.responses import PlainTextResponse, StreamingResponse
+
+    host = os.environ.get("OMBRE_BROWSER_MCP_TAILSCALE_IP", "").strip()
+    port = os.environ.get("OMBRE_BROWSER_MCP_PORT", "3001").strip()
+    if not host:
+        return PlainTextResponse(
+            "Browser MCP proxy is not configured: set OMBRE_BROWSER_MCP_TAILSCALE_IP.",
+            status_code=503,
+        )
+
+    path = (path or "").lstrip("/")
+    target_url = f"http://{host}:{port}/{path}"
+    if request.url.query:
+        target_url += f"?{request.url.query}"
+
+    excluded = {"host", "content-length", "connection", "accept-encoding"}
+    headers = {
+        key: value
+        for key, value in request.headers.items()
+        if key.lower() not in excluded
+    }
+    body = await request.body()
+
+    client = httpx.AsyncClient(timeout=None, trust_env=True)
+    try:
+        upstream_request = client.build_request(
+            request.method,
+            target_url,
+            headers=headers,
+            content=body if body else None,
+        )
+        upstream = await client.send(upstream_request, stream=True)
+    except Exception as e:
+        await client.aclose()
+        return PlainTextResponse(f"Browser MCP proxy upstream error: {e}", status_code=502)
+
+    async def stream_response():
+        try:
+            async for chunk in upstream.aiter_bytes():
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    response_headers = {
+        key: value
+        for key, value in upstream.headers.items()
+        if key.lower() not in {"content-length", "connection", "transfer-encoding"}
+    }
+    media_type = upstream.headers.get("content-type")
+    return StreamingResponse(
+        stream_response(),
+        status_code=upstream.status_code,
+        headers=response_headers,
+        media_type=media_type,
+    )
+
+
+@mcp.custom_route("/browser-sse/{path:path}", methods=["GET", "POST", "OPTIONS"])
+async def browser_sse_proxy(request):
+    return await _browser_mcp_proxy(request, request.path_params.get("path", ""))
+
+
 async def _dual_cadence_loop():
     await asyncio.sleep(20)
     while True:

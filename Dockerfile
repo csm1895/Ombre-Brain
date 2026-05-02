@@ -10,6 +10,14 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# Install Tailscale for optional browser MCP tailnet bridge.
+# Uses userspace networking at runtime, so the app still starts without /dev/net/tun.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && curl -fsSL https://tailscale.com/install.sh | sh \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install dependencies first (leverage Docker cache)
 # 先装依赖（利用 Docker 缓存）
 COPY requirements.txt .
