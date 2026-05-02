@@ -3588,6 +3588,11 @@ async def browser_sse_proxy(request):
     return await _browser_mcp_proxy(request, request.path_params.get("path", ""))
 
 
+@mcp.custom_route("/sse", methods=["GET", "POST", "OPTIONS"])
+async def browser_sse_root_compat_proxy(request):
+    return await _browser_mcp_proxy(request, "sse")
+
+
 async def _dual_cadence_loop():
     await asyncio.sleep(20)
     while True:
