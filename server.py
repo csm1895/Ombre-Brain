@@ -3562,6 +3562,8 @@ async def _browser_mcp_proxy(request, path: str):
     async def stream_response():
         try:
             async for chunk in upstream.aiter_bytes():
+                if path == "sse" and request.method == "GET":
+                    chunk = chunk.replace(b"data: /sse?", b"data: /browser-sse/sse?")
                 yield chunk
         finally:
             await upstream.aclose()
