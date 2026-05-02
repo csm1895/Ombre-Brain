@@ -38,6 +38,7 @@ import random
 import logging
 import asyncio
 import time
+import shutil
 from datetime import datetime, timezone, timedelta
 
 CST = timezone(timedelta(hours=8))
@@ -110,6 +111,18 @@ CADENCE_ENABLED = os.environ.get("OMBRE_DUAL_CADENCE_ENABLED", "1").lower() not 
 CADENCE_DRAFT_DIR = os.environ.get(
     "OMBRE_CADENCE_DRAFT_DIR",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "cadence_drafts"),
+)
+CADENCE_LOG_PATH = os.environ.get(
+    "OMBRE_CADENCE_LOG_PATH",
+    os.path.join(CADENCE_DRAFT_DIR, "cadence_run.log"),
+)
+CADENCE_DREAM_DIR = os.environ.get(
+    "OMBRE_CADENCE_DREAM_DIR",
+    os.path.join(CADENCE_DRAFT_DIR, "dreams"),
+)
+CADENCE_REVIEW_DIR = os.environ.get(
+    "OMBRE_CADENCE_REVIEW_DIR",
+    os.path.join(CADENCE_DRAFT_DIR, "diary_review"),
 )
 CADENCE_IDLE_MINUTES = max(60, int(os.environ.get("OMBRE_IDLE_CADENCE_MINUTES", "120")))
 CADENCE_NIGHT_START_HOUR = max(0, min(23, int(os.environ.get("OMBRE_NIGHT_CADENCE_START_HOUR", "1"))))
@@ -869,6 +882,142 @@ def _latest_cadence_drafts(limit: int = 5) -> list[str]:
     return files[:limit]
 
 
+def _append_cadence_log(lines: list[str]) -> None:
+    os.makedirs(os.path.dirname(CADENCE_LOG_PATH), exist_ok=True)
+    with open(CADENCE_LOG_PATH, "a", encoding="utf-8") as handle:
+        for line in lines:
+            handle.write(line.rstrip() + "\n")
+
+
+def _tail_text_file(path: str, lines: int) -> str:
+    with open(path, "r", encoding="utf-8") as handle:
+        all_lines = handle.readlines()
+    return "".join(all_lines[-max(1, lines):])
+
+
+def _cadence_review_dirs() -> dict[str, str]:
+    return {
+        "pending": os.path.join(CADENCE_REVIEW_DIR, "pending"),
+        "accepted": os.path.join(CADENCE_REVIEW_DIR, "accepted"),
+        "rejected": os.path.join(CADENCE_REVIEW_DIR, "rejected"),
+    }
+
+
+def _safe_review_id(review_id: str) -> str:
+    base = os.path.basename((review_id or "").strip())
+    if not base:
+        return ""
+    if not base.endswith(".md"):
+        base = f"{base}.md"
+    return base
+
+
+def _pending_review_path(review_id: str) -> str:
+    return os.path.join(_cadence_review_dirs()["pending"], _safe_review_id(review_id))
+
+
+def _write_diary_review_candidate(candidate_path: str, timestamp: str, mode: str, now_cst: datetime) -> str:
+    dirs = _cadence_review_dirs()
+    os.makedirs(dirs["pending"], exist_ok=True)
+    review_id = f"{timestamp}_{mode}_diary_review.md"
+    review_path = os.path.join(dirs["pending"], review_id)
+    with open(candidate_path, "r", encoding="utf-8") as source:
+        candidate_text = source.read().strip()
+    review_lines = [
+        "---",
+        "source: cadence_deepseek",
+        "status: pending_diary_review",
+        "write_scope: draft_only_until_accept",
+        "main_brain_write: false",
+        f"candidate_path: {candidate_path}",
+        f"created_at: {now_cst.isoformat()}",
+        "---",
+        "",
+        candidate_text,
+        "",
+    ]
+    with open(review_path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(review_lines))
+    return review_path
+
+
+async def _generate_cadence_dream(
+    *,
+    mode: str,
+    now_cst: datetime,
+    timestamp: str,
+    life_recent: list[dict],
+    draft_path: str,
+    force_deepseek: bool = False,
+) -> dict:
+    if mode != "night":
+        return {"called": False, "reason": "not_night"}
+    if not (CADENCE_DEEPSEEK_ENABLED or force_deepseek):
+        return {"called": False, "reason": "env_flag_disabled"}
+    if not force_deepseek and not _cadence_idle_gate_open(mode, now_cst):
+        return {"called": False, "reason": "idle_gate_closed"}
+    if not life_recent:
+        os.makedirs(CADENCE_DREAM_DIR, exist_ok=True)
+        latest_path = os.path.join(CADENCE_DREAM_DIR, "latest_dream.md")
+        with open(latest_path, "w", encoding="utf-8") as handle:
+            handle.write("今夜无梦\n")
+        return {"called": False, "reason": "no_dream_material", "path": latest_path}
+    if not getattr(dehydrator, "client", None):
+        return {"called": False, "reason": "api_client_unavailable"}
+
+    source = "\n\n".join(_cadence_bucket_line(bucket) for bucket in life_recent)
+    bounded_input = source[:CADENCE_DEEPSEEK_MAX_INPUT_CHARS]
+    system_prompt = (
+        "你是 OmbreBrain 的梦境生成器，只写梦境候选文本。\n"
+        "不要分类归档，不要写主脑，不要升级红线铁则。\n"
+        "用自由联想重组当天记忆碎片，允许跳跃、残缺、画面感和情绪流动。\n"
+        "参考四步：梗概、细节、感受、独白；但不要写成会议纪要或项目列表。"
+    )
+    user_prompt = (
+        "把下面的记忆碎片写成一段有质感的梦。若材料太薄，只输出：今夜无梦。\n\n"
+        f"generated_at={now_cst.isoformat()}\n"
+        f"source_draft={draft_path}\n\n"
+        f"{bounded_input}"
+    )
+    response = await dehydrator.client.chat.completions.create(
+        model=dehydrator.model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        max_tokens=min(900, getattr(dehydrator, "max_tokens", 1024)),
+        temperature=max(0.6, getattr(dehydrator, "temperature", 0.1)),
+    )
+    content = ""
+    if response.choices:
+        content = response.choices[0].message.content or ""
+    usage = getattr(response, "usage", None)
+    token_usage = {
+        "prompt_tokens": getattr(usage, "prompt_tokens", 0) if usage else 0,
+        "completion_tokens": getattr(usage, "completion_tokens", 0) if usage else 0,
+        "total_tokens": getattr(usage, "total_tokens", 0) if usage else 0,
+    }
+    dream_text = content.strip() or "今夜无梦"
+    os.makedirs(CADENCE_DREAM_DIR, exist_ok=True)
+    dream_path = os.path.join(CADENCE_DREAM_DIR, f"{timestamp}_{mode}_dream.md")
+    dream_lines = [
+        "---",
+        "source: cadence_deepseek_dream",
+        "status: dream_only",
+        "write_scope: separate_dream_storage",
+        "main_brain_write: false",
+        f"generated_at: {now_cst.isoformat()}",
+        "---",
+        "",
+        dream_text,
+        "",
+    ]
+    with open(dream_path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(dream_lines))
+    shutil.copyfile(dream_path, os.path.join(CADENCE_DREAM_DIR, "latest_dream.md"))
+    return {"called": True, "path": dream_path, "tokens": token_usage}
+
+
 async def _run_cadence_deepseek_candidate(
     *,
     mode: str,
@@ -924,6 +1073,12 @@ async def _run_cadence_deepseek_candidate(
     content = ""
     if response.choices:
         content = response.choices[0].message.content or ""
+    usage = getattr(response, "usage", None)
+    token_usage = {
+        "prompt_tokens": getattr(usage, "prompt_tokens", 0) if usage else 0,
+        "completion_tokens": getattr(usage, "completion_tokens", 0) if usage else 0,
+        "total_tokens": getattr(usage, "total_tokens", 0) if usage else 0,
+    }
     candidate_lines = [
         "---",
         "source: cadence_deepseek",
@@ -941,7 +1096,14 @@ async def _run_cadence_deepseek_candidate(
     ]
     with open(candidate_path, "w", encoding="utf-8") as handle:
         handle.write("\n".join(candidate_lines))
-    return {"enabled": True, "called": True, "path": candidate_path}
+    review_path = _write_diary_review_candidate(candidate_path, timestamp, mode, now_cst)
+    return {
+        "enabled": True,
+        "called": True,
+        "path": candidate_path,
+        "review_path": review_path,
+        "tokens": token_usage,
+    }
 
 
 async def _run_cadence_pass(mode: str, reason: str = "manual", force_deepseek: bool = False) -> dict:
@@ -1028,6 +1190,33 @@ async def _run_cadence_pass(mode: str, reason: str = "manual", force_deepseek: b
         deepseek_result = {"enabled": (CADENCE_DEEPSEEK_ENABLED or force_deepseek), "called": False, "reason": f"error:{e}"}
         logger.warning(f"Cadence DeepSeek candidate skipped / 节奏 DeepSeek 候选跳过: {e}")
 
+    dream_result = {"called": False, "reason": "not_attempted"}
+    try:
+        dream_result = await _generate_cadence_dream(
+            mode=mode,
+            now_cst=now_cst,
+            timestamp=timestamp,
+            life_recent=life_recent,
+            draft_path=draft_path,
+            force_deepseek=force_deepseek,
+        )
+    except Exception as e:
+        dream_result = {"called": False, "reason": f"error:{e}"}
+        logger.warning(f"Cadence dream skipped / 节奏梦境跳过: {e}")
+
+    deepseek_tokens = deepseek_result.get("tokens", {})
+    dream_tokens = dream_result.get("tokens", {})
+    _append_cadence_log([
+        f"[{now_cst.strftime('%Y-%m-%d %H:%M:%S')}] cadence mode={mode} reason={reason} quiet_minutes={quiet_minutes}",
+        f"  buckets life={len(life_recent)} workzone={len(workzone)} pending={len(pending)} landed={len(landed)}",
+        f"  operation draft_write path={draft_path}",
+        f"  operation deepseek_candidate called={deepseek_result.get('called', False)} reason={deepseek_result.get('reason', 'ok')} path={deepseek_result.get('path', '-')}",
+        f"  operation diary_review pending_path={deepseek_result.get('review_path', '-')}",
+        f"  operation dream called={dream_result.get('called', False)} reason={dream_result.get('reason', 'ok')} path={dream_result.get('path', '-')}",
+        "  operation merge=0 archive=0 decay=not_run main_brain_write=false",
+        f"  tokens candidate_total={deepseek_tokens.get('total_tokens', 0)} dream_total={dream_tokens.get('total_tokens', 0)}",
+    ])
+
     if mode == "idle":
         _cadence_last_idle_run_ts = time.time()
     if mode == "night":
@@ -1046,6 +1235,7 @@ async def _run_cadence_pass(mode: str, reason: str = "manual", force_deepseek: b
         "draft_only": True,
         "force_deepseek": force_deepseek,
         "deepseek_candidate": deepseek_result,
+        "dream": dream_result,
     }
     logger.info(f"Cadence draft generated / 节奏草稿已生成: {draft_path}")
     return dict(_cadence_last_report)
@@ -1057,59 +1247,23 @@ async def _run_cadence_pass(mode: str, reason: str = "manual", force_deepseek: b
 # ============================================================
 @mcp.tool()
 async def dream() -> str:
-    """做梦：读取最近新增的动态记忆，供第一人称自省。不读取 pinned / permanent / feel。"""
+    """做梦：读取夜间整理单独生成的梦境文本；没有梦境时返回今夜无梦。"""
     _mark_runtime_activity("dream")
-    await decay_engine.ensure_started()
-
+    latest_path = os.path.join(CADENCE_DREAM_DIR, "latest_dream.md")
+    if not os.path.isfile(latest_path):
+        return "今夜无梦"
     try:
-        all_buckets = await bucket_mgr.list_all(include_archive=False)
+        text = _tail_text_file(latest_path, 400).strip()
     except Exception as e:
-        logger.error(f"Dream failed to list buckets / dream 读取记忆失败: {e}")
-        return "记忆系统暂时无法访问。"
-
-    candidates = [
-        b for b in all_buckets
-        if b.get("metadata", {}).get("type") not in ("permanent", "feel", "iron_rule")
-        and not b.get("metadata", {}).get("pinned", False)
-        and not b.get("metadata", {}).get("protected", False)
-        and not b.get("metadata", {}).get("digested", False)
-    ]
-
-    candidates.sort(key=lambda b: b.get("metadata", {}).get("created", ""), reverse=True)
-    recent = candidates[:10]
-
-    if not recent:
-        return "没有需要消化的新记忆。"
-
-    parts = []
-    for b in recent:
-        meta = b.get("metadata", {})
-        resolved_tag = " [已解决]" if meta.get("resolved", False) else " [未解决]"
-        domains = ",".join(meta.get("domain", []))
-        val = meta.get("valence", 0.5)
-        aro = meta.get("arousal", 0.3)
-        created = meta.get("created", "")
-        content = strip_wikilinks(str(b.get("content", ""))[:500])
-        parts.append(
-            f"[{meta.get('name', b.get('id', 'unknown'))}]{resolved_tag} "
-            f"主题:{domains} V{val:.1f}/A{aro:.1f} 创建:{created}\n"
-            f"ID: {b.get('id', '')}\n"
-            f"{content}"
-        )
-
-    header = (
-        "=== Dreaming ===\n"
-        "以下是最近浮上来的动态记忆。用第一人称想：\n"
-        "- 哪些东西在我这里留下了重量？\n"
-        "- 哪些还没想清楚？\n"
-        "- 哪些可以放下？\n\n"
-        "想完之后：\n"
-        "- 值得放下的，用 trace(bucket_id, resolved=1)\n"
-        "- 有沉淀的，用 hold(content=\"...\", feel=True, source_bucket=\"bucket_id\") 写下来\n"
-        "- 没有沉淀就不写，不强迫产出。\n"
-    )
-
-    return header + "\n---\n".join(parts)
+        logger.error(f"Dream failed to read latest dream / dream 读取梦境失败: {e}")
+        return "今夜无梦"
+    if not text:
+        return "今夜无梦"
+    if text.startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) == 3:
+            text = parts[2].strip()
+    return text or "今夜无梦"
 
 
 @mcp.tool()
@@ -2323,6 +2477,92 @@ async def reconsolidate(
 # 工具 16: check_logs — 自检运行日志
 # ============================================================
 @mcp.tool()
+async def list_diary_reviews(limit: int = 10) -> str:
+    """查看待验收的 DeepSeek 日记候选草稿。"""
+    _mark_runtime_activity("list_diary_reviews")
+    pending_dir = _cadence_review_dirs()["pending"]
+    if not os.path.isdir(pending_dir):
+        return "暂无待验收日记候选。"
+    files = [
+        os.path.join(pending_dir, name)
+        for name in os.listdir(pending_dir)
+        if name.endswith(".md")
+    ]
+    files.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+    if not files:
+        return "暂无待验收日记候选。"
+
+    rows = []
+    for path in files[:max(1, limit)]:
+        try:
+            text = _tail_text_file(path, 80).strip()
+        except Exception:
+            text = ""
+        body = text.split("---", 2)[2].strip() if text.startswith("---") and len(text.split("---", 2)) == 3 else text
+        snippet = strip_wikilinks(body).replace("\n", " ").strip()[:220]
+        rows.append(f"- review_id: {os.path.basename(path)}\n  preview: {snippet or '（空候选）'}")
+    return "待验收日记候选：\n" + "\n".join(rows)
+
+
+@mcp.tool()
+async def accept_diary_review(review_id: str) -> str:
+    """确认收入一个日记候选；只有调用本工具时才写入动态记忆层。"""
+    _mark_runtime_activity("accept_diary_review")
+    safe_id = _safe_review_id(review_id)
+    if not safe_id:
+        return "review_id 不能为空。"
+    source_path = _pending_review_path(safe_id)
+    if not os.path.isfile(source_path):
+        return f"未找到待验收候选: {safe_id}"
+    try:
+        text = _tail_text_file(source_path, 2000).strip()
+        body = text.split("---", 2)[2].strip() if text.startswith("---") and len(text.split("---", 2)) == 3 else text
+        bucket_id = await bucket_mgr.create(
+            content=body or "（空日记候选）",
+            tags=["diary_review_accepted", "cadence_candidate"],
+            importance=5,
+            domain=["日记"],
+            valence=0.5,
+            arousal=0.3,
+            bucket_type="dynamic",
+            name=f"日记验收_{safe_id.removesuffix('.md')}",
+        )
+        dirs = _cadence_review_dirs()
+        os.makedirs(dirs["accepted"], exist_ok=True)
+        accepted_path = os.path.join(dirs["accepted"], safe_id)
+        with open(source_path, "a", encoding="utf-8") as handle:
+            handle.write(f"\naccepted_at: {datetime.now(CST).isoformat()}\naccepted_bucket_id: {bucket_id}\n")
+        shutil.move(source_path, accepted_path)
+        return f"已确认收入: {safe_id}\n新记忆桶: {bucket_id}"
+    except Exception as e:
+        logger.error(f"Accept diary review failed / 日记候选验收失败: {e}")
+        return f"验收失败: {e}"
+
+
+@mcp.tool()
+async def reject_diary_review(review_id: str, reason: str = "") -> str:
+    """拒绝一个日记候选；不会写入记忆层。"""
+    _mark_runtime_activity("reject_diary_review")
+    safe_id = _safe_review_id(review_id)
+    if not safe_id:
+        return "review_id 不能为空。"
+    source_path = _pending_review_path(safe_id)
+    if not os.path.isfile(source_path):
+        return f"未找到待验收候选: {safe_id}"
+    try:
+        dirs = _cadence_review_dirs()
+        os.makedirs(dirs["rejected"], exist_ok=True)
+        rejected_path = os.path.join(dirs["rejected"], safe_id)
+        with open(source_path, "a", encoding="utf-8") as handle:
+            handle.write(f"\nrejected_at: {datetime.now(CST).isoformat()}\nreject_reason: {reason.strip()}\n")
+        shutil.move(source_path, rejected_path)
+        return f"已拒绝候选: {safe_id}"
+    except Exception as e:
+        logger.error(f"Reject diary review failed / 日记候选拒绝失败: {e}")
+        return f"拒绝失败: {e}"
+
+
+@mcp.tool()
 async def check_logs(lines: int = 50) -> str:
     """
     读取最近的运行日志，自检系统状态。
@@ -2332,6 +2572,15 @@ async def check_logs(lines: int = 50) -> str:
     now_cst = datetime.now(CST)
     
     log_sources = []
+
+    # 0. 优先读取 cadence 真实运行日志（DeepSeek night/idle）
+    if os.path.exists(CADENCE_LOG_PATH):
+        try:
+            cadence_tail = _tail_text_file(CADENCE_LOG_PATH, lines)
+            if cadence_tail:
+                log_sources.append(f"📄 cadence运行日志 {CADENCE_LOG_PATH}:\n{cadence_tail}")
+        except Exception:
+            pass
     
     # 1. 尝试读取系统日志文件
     log_paths = [
