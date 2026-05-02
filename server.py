@@ -124,6 +124,10 @@ CADENCE_REVIEW_DIR = os.environ.get(
     "OMBRE_CADENCE_REVIEW_DIR",
     os.path.join(CADENCE_DRAFT_DIR, "diary_review"),
 )
+CADENCE_RECEIPT_DIR = os.environ.get(
+    "OMBRE_CADENCE_RECEIPT_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "cadence_receipts"),
+)
 CADENCE_IDLE_MINUTES = max(60, int(os.environ.get("OMBRE_IDLE_CADENCE_MINUTES", "120")))
 CADENCE_NIGHT_START_HOUR = max(0, min(23, int(os.environ.get("OMBRE_NIGHT_CADENCE_START_HOUR", "1"))))
 CADENCE_NIGHT_END_HOUR = max(1, min(24, int(os.environ.get("OMBRE_NIGHT_CADENCE_END_HOUR", "6"))))
@@ -1018,6 +1022,115 @@ async def _generate_cadence_dream(
     return {"called": True, "path": dream_path, "tokens": token_usage}
 
 
+def _latest_cadence_receipts(limit: int = 5) -> list[str]:
+    if not os.path.isdir(CADENCE_RECEIPT_DIR):
+        return []
+    files = [
+        os.path.join(CADENCE_RECEIPT_DIR, name)
+        for name in os.listdir(CADENCE_RECEIPT_DIR)
+        if name.endswith(".json")
+    ]
+    files.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+    return files[:limit]
+
+
+def _cadence_pass_type(mode: str, reason: str, force_deepseek: bool) -> str:
+    if force_deepseek:
+        return f"force-{mode}"
+    if reason.startswith("manual"):
+        return "manual"
+    return mode
+
+
+def _cadence_receipt_status(deepseek_result: dict) -> str:
+    if deepseek_result.get("called"):
+        return "success"
+    reason = str(deepseek_result.get("reason", ""))
+    return "error" if reason.startswith("error:") else "skipped"
+
+
+def _write_cadence_receipt(
+    *,
+    mode: str,
+    reason: str,
+    now_cst: datetime,
+    timestamp: str,
+    draft_path: str,
+    quiet_minutes: float,
+    counts: dict,
+    deepseek_result: dict,
+    force_deepseek: bool,
+) -> dict:
+    os.makedirs(CADENCE_RECEIPT_DIR, exist_ok=True)
+    pass_type = _cadence_pass_type(mode, reason, force_deepseek)
+    status = _cadence_receipt_status(deepseek_result)
+    receipt_base = f"{timestamp}_{pass_type}_receipt"
+    json_path = os.path.join(CADENCE_RECEIPT_DIR, f"{receipt_base}.json")
+    md_path = os.path.join(CADENCE_RECEIPT_DIR, f"{receipt_base}.md")
+    deepseek_reason = deepseek_result.get("reason", "")
+    receipt = {
+        "schema_version": "1.0",
+        "generated_at": now_cst.isoformat(),
+        "pass_type": pass_type,
+        "mode": mode,
+        "trigger_reason": reason,
+        "draft_path": draft_path,
+        "draft_only": True,
+        "deepseek_enabled": bool(deepseek_result.get("enabled", False)),
+        "deepseek_called": bool(deepseek_result.get("called", False)),
+        "deepseek_reason": deepseek_reason,
+        "deepseek_model": getattr(dehydrator, "model", ""),
+        "status": status,
+        "error_message": deepseek_reason[6:] if str(deepseek_reason).startswith("error:") else "",
+        "life_count": counts.get("life_count", 0),
+        "workzone_count": counts.get("workzone_count", 0),
+        "pending_count": counts.get("pending_count", 0),
+        "landed_count": counts.get("landed_count", 0),
+        "quiet_minutes": quiet_minutes,
+        "write_scope": "draft_only",
+    }
+    with open(json_path, "w", encoding="utf-8") as handle:
+        json.dump(receipt, handle, ensure_ascii=False, indent=2)
+
+    summary_lines = [
+        "# Cadence Receipt",
+        "",
+        f"- generated_at: {receipt['generated_at']}",
+        f"- pass_type: {pass_type}",
+        f"- status: {status}",
+        f"- deepseek_called: {receipt['deepseek_called']}",
+        f"- deepseek_reason: {deepseek_reason or 'none'}",
+        f"- draft_path: {draft_path}",
+        "- review_note: Morning review only; no main brain write or promotion happened.",
+        "",
+    ]
+    with open(md_path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(summary_lines))
+    return {"json_path": json_path, "markdown_path": md_path, **receipt}
+
+
+def _read_latest_cadence_receipt_summary() -> dict:
+    latest = _latest_cadence_receipts(limit=1)
+    if not latest:
+        return {}
+    path = latest[0]
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            receipt = json.load(handle)
+        return {
+            "path": path,
+            "generated_at": receipt.get("generated_at", ""),
+            "pass_type": receipt.get("pass_type", ""),
+            "status": receipt.get("status", ""),
+            "deepseek_called": receipt.get("deepseek_called", False),
+            "deepseek_reason": receipt.get("deepseek_reason", ""),
+            "draft_path": receipt.get("draft_path", ""),
+            "write_scope": receipt.get("write_scope", ""),
+        }
+    except Exception as e:
+        return {"path": path, "error": str(e)}
+
+
 async def _run_cadence_deepseek_candidate(
     *,
     mode: str,
@@ -1190,6 +1303,12 @@ async def _run_cadence_pass(mode: str, reason: str = "manual", force_deepseek: b
         deepseek_result = {"enabled": (CADENCE_DEEPSEEK_ENABLED or force_deepseek), "called": False, "reason": f"error:{e}"}
         logger.warning(f"Cadence DeepSeek candidate skipped / 节奏 DeepSeek 候选跳过: {e}")
 
+    counts = {
+        "life_count": len(life_recent),
+        "workzone_count": len(workzone),
+        "pending_count": len(pending),
+        "landed_count": len(landed),
+    }
     dream_result = {"called": False, "reason": "not_attempted"}
     try:
         dream_result = await _generate_cadence_dream(
@@ -1217,6 +1336,18 @@ async def _run_cadence_pass(mode: str, reason: str = "manual", force_deepseek: b
         f"  tokens candidate_total={deepseek_tokens.get('total_tokens', 0)} dream_total={dream_tokens.get('total_tokens', 0)}",
     ])
 
+    receipt = _write_cadence_receipt(
+        mode=mode,
+        reason=reason,
+        now_cst=now_cst,
+        timestamp=timestamp,
+        draft_path=draft_path,
+        quiet_minutes=quiet_minutes,
+        counts=counts,
+        deepseek_result=deepseek_result,
+        force_deepseek=force_deepseek,
+    )
+
     if mode == "idle":
         _cadence_last_idle_run_ts = time.time()
     if mode == "night":
@@ -1228,14 +1359,16 @@ async def _run_cadence_pass(mode: str, reason: str = "manual", force_deepseek: b
         "generated_at": now_cst.isoformat(),
         "path": draft_path,
         "quiet_minutes": quiet_minutes,
-        "life_count": len(life_recent),
-        "workzone_count": len(workzone),
-        "pending_count": len(pending),
-        "landed_count": len(landed),
+        "life_count": counts["life_count"],
+        "workzone_count": counts["workzone_count"],
+        "pending_count": counts["pending_count"],
+        "landed_count": counts["landed_count"],
         "draft_only": True,
         "force_deepseek": force_deepseek,
         "deepseek_candidate": deepseek_result,
         "dream": dream_result,
+        "receipt_path": receipt.get("json_path", ""),
+        "receipt_markdown_path": receipt.get("markdown_path", ""),
     }
     logger.info(f"Cadence draft generated / 节奏草稿已生成: {draft_path}")
     return dict(_cadence_last_report)
@@ -2570,6 +2703,27 @@ async def check_logs(lines: int = 50) -> str:
     """
     import subprocess
     now_cst = datetime.now(CST)
+    receipt_summary = _read_latest_cadence_receipt_summary()
+    latest_draft = (_latest_cadence_drafts(limit=1) or [""])[0]
+
+    def _cadence_observability_text() -> str:
+        if not receipt_summary:
+            return (
+                "Cadence observability:\n"
+                "- latest_receipt_path: none\n"
+                f"- latest_cadence_draft_path: {latest_draft or 'none'}\n"
+                "- last_deepseek_called: false\n"
+            )
+        return (
+            "Cadence observability:\n"
+            f"- latest_receipt_path: {receipt_summary.get('path', '')}\n"
+            f"- latest_receipt_summary: pass_type={receipt_summary.get('pass_type', '')}; "
+            f"status={receipt_summary.get('status', '')}; "
+            f"deepseek_called={receipt_summary.get('deepseek_called', False)}; "
+            f"reason={receipt_summary.get('deepseek_reason', '')}\n"
+            f"- latest_cadence_draft_path: {receipt_summary.get('draft_path', '') or latest_draft or 'none'}\n"
+            f"- last_deepseek_called: {receipt_summary.get('deepseek_called', False)}\n"
+        )
     
     log_sources = []
 
@@ -2612,12 +2766,18 @@ async def check_logs(lines: int = 50) -> str:
                 f"{uptime_info}\n"
                 f"记忆桶总数: {stats['dynamic_count'] + stats['permanent_count'] + stats['iron_rule_count']}\n"
                 f"衰减引擎: {'运行中' if decay_engine.is_running else '已停止'}\n\n"
+                f"{_cadence_observability_text()}\n"
                 f"💡 提示：Zeabur容器环境日志通过平台界面查看更完整。"
             )
         except Exception as e:
             return f"获取系统状态失败: {e}"
     
-    return f"🕐 查询时间: {now_cst.strftime('%Y-%m-%d %H:%M:%S')}\n\n" + "\n\n".join(log_sources)
+    return (
+        f"🕐 查询时间: {now_cst.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        + _cadence_observability_text()
+        + "\n"
+        + "\n\n".join(log_sources)
+    )
 
 # ============================================================
 # 工具 17: see_image — 混元vision看图
@@ -2935,6 +3095,7 @@ async def api_cadence_status(request):
     return JSONResponse({
         "enabled": CADENCE_ENABLED,
         "draft_dir": CADENCE_DRAFT_DIR,
+        "receipt_dir": CADENCE_RECEIPT_DIR,
         "idle_minutes": CADENCE_IDLE_MINUTES,
         "night_window": [CADENCE_NIGHT_START_HOUR, CADENCE_NIGHT_END_HOUR],
         "night_min_idle_minutes": CADENCE_NIGHT_MIN_IDLE_MINUTES,
@@ -2943,6 +3104,7 @@ async def api_cadence_status(request):
         "last_night_run_date": _cadence_last_night_run_date,
         "last_report": _cadence_last_report,
         "latest_drafts": latest,
+        "latest_receipt": _read_latest_cadence_receipt_summary(),
         "draft_only": True,
         "main_brain_write": False,
     })
