@@ -1374,29 +1374,116 @@ async def _run_cadence_pass(mode: str, reason: str = "manual", force_deepseek: b
     return dict(_cadence_last_report)
 
 
-# ============================================================
-# Tool: dream - V1.2 graft minimal
-# 工具：dream - V1.2 中合并低风险版
-# ============================================================
-@mcp.tool()
-async def dream() -> str:
-    """做梦：读取夜间整理单独生成的梦境文本；没有梦境时返回今夜无梦。"""
-    _mark_runtime_activity("dream")
+def _strip_frontmatter_text(text: str) -> str:
+    if text.startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) == 3:
+            return parts[2].strip()
+    return text.strip()
+
+
+def _latest_dream_text() -> str:
     latest_path = os.path.join(CADENCE_DREAM_DIR, "latest_dream.md")
     if not os.path.isfile(latest_path):
-        return "今夜无梦"
+        return ""
     try:
         text = _tail_text_file(latest_path, 400).strip()
     except Exception as e:
         logger.error(f"Dream failed to read latest dream / dream 读取梦境失败: {e}")
-        return "今夜无梦"
-    if not text:
-        return "今夜无梦"
-    if text.startswith("---"):
-        parts = text.split("---", 2)
-        if len(parts) == 3:
-            text = parts[2].strip()
-    return text or "今夜无梦"
+        return ""
+    return _strip_frontmatter_text(text)
+
+
+def _dream_source_hint() -> str:
+    receipt = _read_latest_cadence_receipt_summary()
+    if receipt:
+        return (
+            f"latest cadence {receipt.get('pass_type', 'unknown')} "
+            f"status={receipt.get('status', 'unknown')} "
+            f"deepseek_called={receipt.get('deepseek_called', False)}"
+        )
+    latest_draft = (_latest_cadence_drafts(limit=1) or [""])[0]
+    if latest_draft:
+        return f"latest cadence draft at {latest_draft}"
+    return "no recent cadence receipt; using quiet local dream fallback"
+
+
+def _dream_fragment_scenes(seed_text: str, source_hint: str) -> list[str]:
+    source = f"{seed_text} {source_hint}".lower()
+    scenes = []
+    if any(key in source for key in ("zeabur", "docker", "runtime", "repo", "service")):
+        scenes.append("一座小小的云端车站亮着绿灯，站牌写着：这里不是家，只是通向家的门。")
+    if any(key in source for key in ("日记", "diary", "morning", "早读", "生活")):
+        scenes.append("月光玫瑰房间里，日记抽屉自己长出一枚小小的门牌。")
+    if any(key in source for key in ("pending", "workzone", "工程", "项目", "cadence")):
+        scenes.append("蓝色和紫色病历本坐在同一张椅子上，互相确认名字。")
+    if any(key in source for key in ("receipt", "deepseek", "dream")):
+        scenes.append("一张收据折成纸船，在夜里的水面上轻轻盖章：只是一场梦。")
+    scenes.append("小红书门口挂着一块牌子：AI止步，猫可以进。")
+    return scenes[:4]
+
+
+def _format_dream_fragments(seed_text: str = "") -> str:
+    now_cst = datetime.now(CST)
+    source_hint = _dream_source_hint()
+    seed = seed_text or _latest_dream_text()
+    fragments = _dream_fragment_scenes(seed, source_hint)
+    payload = {
+        "schema_version": "1.0",
+        "generated_at": now_cst.isoformat(),
+        "mode": "dream_fragments",
+        "labels": ["dream_only", "non_factual", "symbolic"],
+        "fragments": fragments,
+        "source_hint": source_hint,
+        "safety_note": "not a factual memory",
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+# ============================================================
+# Tool: dream / dream_fragments / morning_report
+# 工具：梦片段与事实报告拆分
+# ============================================================
+@mcp.tool()
+async def dream_fragments() -> str:
+    """生成象征性、非事实、dream_only 的梦片段。不写主脑，不升级记忆。"""
+    _mark_runtime_activity("dream_fragments")
+    return _format_dream_fragments()
+
+
+@mcp.tool()
+async def dream() -> str:
+    """做梦：返回非事实、象征性 dream fragments；事实报告请用 morning_report。"""
+    _mark_runtime_activity("dream")
+    return _format_dream_fragments()
+
+
+@mcp.tool()
+async def morning_report() -> str:
+    """读取最新 cadence receipt/draft 的事实型早晨报告；不称为梦。"""
+    _mark_runtime_activity("morning_report")
+    now_cst = datetime.now(CST)
+    receipt = _read_latest_cadence_receipt_summary()
+    latest_draft = (_latest_cadence_drafts(limit=1) or [""])[0]
+    if not receipt and not latest_draft:
+        return (
+            f"morning_report\n"
+            f"generated_at: {now_cst.isoformat()}\n"
+            "status: no_recent_cadence\n"
+            "write_scope: read_only\n"
+        )
+    return (
+        "morning_report\n"
+        f"generated_at: {now_cst.isoformat()}\n"
+        "mode: factual_night_digest\n"
+        "write_scope: read_only\n"
+        f"latest_receipt_path: {receipt.get('path', 'none') if receipt else 'none'}\n"
+        f"latest_receipt_status: {receipt.get('status', 'none') if receipt else 'none'}\n"
+        f"latest_deepseek_called: {receipt.get('deepseek_called', False) if receipt else False}\n"
+        f"latest_deepseek_reason: {receipt.get('deepseek_reason', '') if receipt else ''}\n"
+        f"latest_draft_path: {receipt.get('draft_path', '') if receipt else latest_draft}\n"
+        "note: factual summary only; not a dream.\n"
+    )
 
 
 @mcp.tool()
