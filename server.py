@@ -978,6 +978,32 @@ def _tail_text_file(path: str, lines: int) -> str:
     return "".join(all_lines[-max(1, lines):])
 
 
+def _filter_log_lines(text: str, keyword: str, lines: int) -> str:
+    keyword = (keyword or "").strip().lower()
+    if not keyword:
+        return text
+    matched = [line for line in text.splitlines() if keyword in line.lower()]
+    return "\n".join(matched[-max(1, lines):])
+
+
+def _extract_log_attention_lines(text: str, lines: int = 12) -> str:
+    markers = (
+        "error",
+        "warning",
+        "warn",
+        "failed",
+        "failure",
+        "exception",
+        "traceback",
+        "502",
+        "bad gateway",
+        "timeout",
+        "module not found",
+    )
+    matched = [line for line in text.splitlines() if any(marker in line.lower() for marker in markers)]
+    return "\n".join(matched[-max(1, lines):])
+
+
 def _cadence_review_dirs() -> dict[str, str]:
     return {
         "pending": os.path.join(CADENCE_REVIEW_DIR, "pending"),
@@ -2901,17 +2927,19 @@ async def reject_diary_review(review_id: str, reason: str = "") -> str:
 
 
 @mcp.tool()
-async def check_logs(lines: int = 50, source: str = "all") -> str:
+async def check_logs(lines: int = 50, source: str = "all", keyword: str = "") -> str:
     """
     读取最近的运行日志，自检系统状态。
     lines: 返回最近多少行日志，默认50行。
     source: all/cadence/zeabur/system，默认all。
+    keyword: 可选关键词过滤，例如 error / mcp / cadence。
     """
     import subprocess
     now_cst = clock_now()
     source = (source or "all").strip().lower()
     if source not in ("all", "cadence", "zeabur", "system"):
         return "source 只支持 all / cadence / zeabur / system。"
+    keyword = (keyword or "").strip()
     receipt_summary = _read_latest_cadence_receipt_summary()
     latest_draft = (_latest_cadence_drafts(limit=1) or [""])[0]
 
@@ -2935,11 +2963,16 @@ async def check_logs(lines: int = 50, source: str = "all") -> str:
         )
     
     log_sources = []
+    attention_lines = []
 
     # 0. 优先读取 cadence 真实运行日志（DeepSeek night/idle）
     if source in ("all", "cadence") and os.path.exists(CADENCE_LOG_PATH):
         try:
             cadence_tail = _tail_text_file(CADENCE_LOG_PATH, lines)
+            attention = _extract_log_attention_lines(cadence_tail)
+            if attention:
+                attention_lines.append(f"cadence {CADENCE_LOG_PATH}:\n{attention}")
+            cadence_tail = _filter_log_lines(cadence_tail, keyword, lines)
             if cadence_tail:
                 log_sources.append(f"📄 cadence运行日志 {CADENCE_LOG_PATH}:\n{cadence_tail}")
         except Exception:
@@ -2949,6 +2982,10 @@ async def check_logs(lines: int = 50, source: str = "all") -> str:
     if source in ("all", "zeabur") and os.path.exists(ZEABUR_CONTAINER_LOG_PATH):
         try:
             zeabur_tail = _tail_text_file(ZEABUR_CONTAINER_LOG_PATH, lines)
+            attention = _extract_log_attention_lines(zeabur_tail)
+            if attention:
+                attention_lines.append(f"zeabur {ZEABUR_CONTAINER_LOG_PATH}:\n{attention}")
+            zeabur_tail = _filter_log_lines(zeabur_tail, keyword, lines)
             if zeabur_tail:
                 log_sources.append(f"📄 Zeabur容器日志 {ZEABUR_CONTAINER_LOG_PATH}:\n{zeabur_tail}")
         except Exception:
@@ -2969,7 +3006,12 @@ async def check_logs(lines: int = 50, source: str = "all") -> str:
                     capture_output=True, text=True, timeout=5
                 )
                 if result.stdout:
-                    log_sources.append(f"📄 来自日志文件 {log_path}:\n{result.stdout}")
+                    attention = _extract_log_attention_lines(result.stdout)
+                    if attention:
+                        attention_lines.append(f"system {log_path}:\n{attention}")
+                    system_tail = _filter_log_lines(result.stdout, keyword, lines)
+                    if system_tail:
+                        log_sources.append(f"📄 来自日志文件 {log_path}:\n{system_tail}")
             except Exception:
                 pass
     
@@ -2985,14 +3027,21 @@ async def check_logs(lines: int = 50, source: str = "all") -> str:
                 f"记忆桶总数: {stats['dynamic_count'] + stats['permanent_count'] + stats['iron_rule_count']}\n"
                 f"衰减引擎: {'运行中' if decay_engine.is_running else '已停止'}\n\n"
                 f"{_cadence_observability_text()}\n"
-                f"💡 提示：source=zeabur 可读取容器 stdout/stderr 本地副本。"
+                f"💡 提示：source=zeabur 可读取容器 stdout/stderr 本地副本；keyword=error 可过滤关键行。"
             )
         except Exception as e:
             return f"获取系统状态失败: {e}"
+
+    attention_text = ""
+    if attention_lines:
+        attention_text = "\n最近需要注意的日志线索:\n" + "\n\n".join(attention_lines) + "\n"
+    elif keyword:
+        attention_text = f"\n关键词过滤: {keyword}\n"
     
     return (
         f"🕐 查询时间: {now_cst.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
         + _cadence_observability_text()
+        + attention_text
         + "\n"
         + "\n\n".join(log_sources)
     )
@@ -3376,11 +3425,12 @@ async def api_logs(request):
     from starlette.responses import PlainTextResponse
 
     source = request.query_params.get("source", "all")
+    keyword = request.query_params.get("keyword", "")
     try:
         lines = int(request.query_params.get("lines", "50"))
     except ValueError:
         lines = 50
-    result = await check_logs(lines=lines, source=source)
+    result = await check_logs(lines=lines, source=source, keyword=keyword)
     return PlainTextResponse(result)
 
 
