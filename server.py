@@ -54,7 +54,7 @@ from mcp.server.fastmcp import FastMCP
 from bucket_manager import BucketManager
 from dehydrator import Dehydrator
 from decay_engine import DecayEngine
-from utils import load_config, setup_logging
+from utils import load_config, setup_logging, clock_now
 
 try:
     from ombre_mcp_readonly.registry import READONLY_TOOL_REGISTRY
@@ -256,7 +256,7 @@ def _save_tail_context_text(raw_text: str, window_id: str = "", max_messages: in
     if not items:
         return {"saved": False, "reason": "empty_tail_context"}
     os.makedirs(os.path.dirname(TAIL_CONTEXT_PATH), exist_ok=True)
-    now_cst = datetime.now(CST)
+    now_cst = clock_now()
     content = [
         "---",
         "source: previous_window_tail",
@@ -306,11 +306,11 @@ def _save_note(content: str, sender: str, to: str = "", category: str = "manual"
     import time
     ttl = NOTE_TTL.get(category, 0)
     note = {
-        "id": datetime.now(CST).strftime("%Y%m%d_%H%M%S_%f"),
+        "id": clock_now().strftime("%Y%m%d_%H%M%S_%f"),
         "sender": sender or "匿名小克",
         "to": to or "",
         "content": content.strip(),
-        "time": datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S"),
+        "time": clock_now().strftime("%Y-%m-%d %H:%M:%S"),
         "read_by": [],
         "category": category,
         "created_ts": time.time(),
@@ -450,7 +450,7 @@ async def _handle_intent(client: anthropic.AsyncAnthropic, intent: dict, sender:
             "content": content,
             "intent": intent_type,
             "summary": intent.get("summary", content[:100]),
-            "time": datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S"),
+            "time": clock_now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         pushed = False
         for q in _task_subscribers:
@@ -587,7 +587,7 @@ async def api_task_stream(request):
     async def event_generator():
         try:
             # Send initial connected event
-            yield f"data: {json.dumps({'type': 'connected', 'time': datetime.now(CST).strftime('%Y-%m-%d %H:%M:%S')})}\n\n"
+            yield f"data: {json.dumps({'type': 'connected', 'time': clock_now().strftime('%Y-%m-%d %H:%M:%S')})}\n\n"
             while True:
                 try:
                     task = await asyncio.wait_for(queue.get(), timeout=30)
@@ -945,7 +945,7 @@ def _cadence_bucket_line(bucket: dict) -> str:
 def _cadence_idle_gate_open(mode: str, now_cst: datetime | None = None) -> bool:
     quiet_seconds = _cadence_recent_idle_seconds()
     if mode == "night":
-        now_cst = now_cst or datetime.now(CST)
+        now_cst = now_cst or clock_now()
         return (
             _cadence_is_night_window(now_cst)
             and quiet_seconds >= (CADENCE_NIGHT_MIN_IDLE_MINUTES * 60)
@@ -1310,7 +1310,7 @@ async def _run_cadence_pass(mode: str, reason: str = "manual", force_deepseek: b
     await decay_engine.ensure_started()
     os.makedirs(CADENCE_DRAFT_DIR, exist_ok=True)
 
-    now_cst = datetime.now(CST)
+    now_cst = clock_now()
     buckets = await bucket_mgr.list_all(include_archive=False)
     buckets.sort(
         key=lambda bucket: bucket.get("metadata", {}).get("last_active")
@@ -1509,7 +1509,7 @@ def _dream_fragment_scenes(seed_text: str, source_hint: str) -> list[str]:
 
 
 def _format_dream_fragments(seed_text: str = "") -> str:
-    now_cst = datetime.now(CST)
+    now_cst = clock_now()
     source_hint = _dream_source_hint()
     seed = seed_text or _latest_dream_text()
     fragments = _dream_fragment_scenes(seed, source_hint)
@@ -1547,7 +1547,7 @@ async def dream() -> str:
 async def morning_report() -> str:
     """读取最新 cadence receipt/draft 的事实型早晨报告；不称为梦。"""
     _mark_runtime_activity("morning_report")
-    now_cst = datetime.now(CST)
+    now_cst = clock_now()
     receipt = _read_latest_cadence_receipt_summary()
     latest_draft = (_latest_cadence_drafts(limit=1) or [""])[0]
     if not receipt and not latest_draft:
@@ -1584,7 +1584,7 @@ async def breath(
     await decay_engine.ensure_started()
 
     # --- 注入当前北京时间 / Inject current Beijing time ---
-    now_cst = datetime.now(CST)
+    now_cst = clock_now()
     time_section = f"=== 🕐 当前时间 ===\n{now_cst.strftime('%Y年%m月%d日 %H:%M')} （北京时间）\n\n"
 
     # --- ALWAYS fetch iron rules first / 始终先获取红线铁则 ---
@@ -1709,7 +1709,9 @@ async def breath(
                     created_str = b["metadata"].get("created", "")
                     try:
                         created = datetime.fromisoformat(created_str)
-                        days_old = (datetime.now() - created).days
+                        if created.tzinfo is None:
+                            created = created.replace(tzinfo=clock_now().tzinfo)
+                        days_old = (clock_now() - created).days
                         if days_old > 7:
                             rumination_tag = f" ⟳ 反刍中（{days_old}天未解决）"
                     except (ValueError, TypeError):
@@ -2256,7 +2258,7 @@ async def pulse(include_archive: bool = False) -> str:
     except Exception as e:
         return f"获取系统状态失败: {e}"
 
-    now_cst = datetime.now(CST)
+    now_cst = clock_now()
     status = (
         f"=== Ombre Brain 记忆系统 ===\n"
         f"🕐 当前时间: {now_cst.strftime('%Y年%m月%d日 %H:%M')} （北京时间）\n"
@@ -2493,7 +2495,7 @@ async def set_user_state(
         except ValueError:
             return f"日期格式错误，应为 YYYY-MM-DD，收到: {end_date}"
     
-    start_date = datetime.now(CST).strftime("%Y-%m-%d")
+    start_date = clock_now().strftime("%Y-%m-%d")
     
     try:
         bucket_id = await bucket_mgr.create(
@@ -2712,7 +2714,7 @@ async def set_attachment(
     
     from datetime import datetime, timezone, timedelta
     CST = timezone(timedelta(hours=8))
-    today = datetime.now(CST).strftime("%Y-%m-%d")
+    today = clock_now().strftime("%Y-%m-%d")
     
     indicators_list = [i.strip() for i in indicators.split(",") if i.strip()] if indicators else []
     
@@ -2867,7 +2869,7 @@ async def accept_diary_review(review_id: str) -> str:
         os.makedirs(dirs["accepted"], exist_ok=True)
         accepted_path = os.path.join(dirs["accepted"], safe_id)
         with open(source_path, "a", encoding="utf-8") as handle:
-            handle.write(f"\naccepted_at: {datetime.now(CST).isoformat()}\naccepted_bucket_id: {bucket_id}\n")
+            handle.write(f"\naccepted_at: {clock_now().isoformat()}\naccepted_bucket_id: {bucket_id}\n")
         shutil.move(source_path, accepted_path)
         return f"已确认收入: {safe_id}\n新记忆桶: {bucket_id}"
     except Exception as e:
@@ -2890,7 +2892,7 @@ async def reject_diary_review(review_id: str, reason: str = "") -> str:
         os.makedirs(dirs["rejected"], exist_ok=True)
         rejected_path = os.path.join(dirs["rejected"], safe_id)
         with open(source_path, "a", encoding="utf-8") as handle:
-            handle.write(f"\nrejected_at: {datetime.now(CST).isoformat()}\nreject_reason: {reason.strip()}\n")
+            handle.write(f"\nrejected_at: {clock_now().isoformat()}\nreject_reason: {reason.strip()}\n")
         shutil.move(source_path, rejected_path)
         return f"已拒绝候选: {safe_id}"
     except Exception as e:
@@ -2906,7 +2908,7 @@ async def check_logs(lines: int = 50, source: str = "all") -> str:
     source: all/cadence/zeabur/system，默认all。
     """
     import subprocess
-    now_cst = datetime.now(CST)
+    now_cst = clock_now()
     source = (source or "all").strip().lower()
     if source not in ("all", "cadence", "zeabur", "system"):
         return "source 只支持 all / cadence / zeabur / system。"
@@ -3102,7 +3104,7 @@ async def post(content: str, sender: str = "YC", to: str = "") -> str:
         "content": content,
         "sender": sender or "YC",
         "to": to or "",
-        "created": datetime.now().isoformat(timespec="seconds"),
+        "created": clock_now().isoformat(timespec="seconds"),
         "read_by": []
     }
 
@@ -3245,7 +3247,7 @@ async def api_test_post(request):
         "content": body.get("content", ""),
         "sender": body.get("sender", "YC"),
         "to": body.get("to", ""),
-        "created": datetime.now().isoformat(timespec="seconds"),
+        "created": clock_now().isoformat(timespec="seconds"),
         "read_by": []
     }
 
@@ -3387,7 +3389,7 @@ async def _dual_cadence_loop():
     while True:
         try:
             if CADENCE_ENABLED:
-                now_cst = datetime.now(CST)
+                now_cst = clock_now()
                 quiet_seconds = _cadence_recent_idle_seconds()
                 if (
                     _cadence_is_night_window(now_cst)

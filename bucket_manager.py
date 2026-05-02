@@ -39,7 +39,7 @@ import frontmatter
 import jieba
 from rapidfuzz import fuzz
 
-from utils import generate_bucket_id, sanitize_name, safe_path, now_iso
+from utils import generate_bucket_id, sanitize_name, safe_path, now_iso, clock_now
 
 logger = logging.getLogger("ombre_brain.bucket")
 
@@ -647,7 +647,9 @@ class BucketManager:
         last_active_str = meta.get("last_active", meta.get("created", ""))
         try:
             last_active = datetime.fromisoformat(str(last_active_str))
-            days = max(0.0, (datetime.now() - last_active).total_seconds() / 86400)
+            if last_active.tzinfo is None:
+                last_active = last_active.replace(tzinfo=clock_now().tzinfo)
+            days = max(0.0, (clock_now() - last_active).total_seconds() / 86400)
         except (ValueError, TypeError):
             days = 30
         return math.exp(-0.02 * days)
@@ -856,7 +858,7 @@ class BucketManager:
             return []
         
         states = []
-        today = datetime.now().date()
+        today = clock_now().date()
         
         for root, _, files in os.walk(self.iron_rule_dir):
             for filename in files:

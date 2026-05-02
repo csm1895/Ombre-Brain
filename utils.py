@@ -15,7 +15,35 @@ import uuid
 import yaml
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - Python < 3.9 fallback
+    ZoneInfo = None
+
+
+CLOCK_TIMEZONE_NAME = os.environ.get("OMBRE_CLOCK_TIMEZONE", "Asia/Shanghai")
+if ZoneInfo is not None:
+    CLOCK_TZ = ZoneInfo(CLOCK_TIMEZONE_NAME)
+else:
+    CLOCK_TZ = timezone(timedelta(hours=8), name="Asia/Shanghai")
+
+
+def clock_now() -> datetime:
+    """
+    Return the realtime clock value used by OmbreBrain.
+    固定使用 Asia/Shanghai，避免依赖容器默认时区。
+    """
+    return datetime.now(CLOCK_TZ)
+
+
+def clock_now_iso() -> str:
+    """
+    Return realtime clock value as ISO string.
+    返回实时时钟 ISO 字符串。
+    """
+    return clock_now().isoformat(timespec="seconds")
 
 
 def load_config(config_path: str = None) -> dict:
@@ -197,4 +225,4 @@ def now_iso() -> str:
     Return current time as ISO format string.
     返回当前时间的 ISO 格式字符串。
     """
-    return datetime.now().isoformat(timespec="seconds")
+    return clock_now_iso()

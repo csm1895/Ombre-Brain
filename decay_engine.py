@@ -24,6 +24,8 @@ import asyncio
 import logging
 from datetime import datetime
 
+from utils import clock_now
+
 logger = logging.getLogger("ombre_brain.decay")
 
 
@@ -94,7 +96,9 @@ class DecayEngine:
         last_active_str = metadata.get("last_active", metadata.get("created", ""))
         try:
             last_active = datetime.fromisoformat(str(last_active_str))
-            days_since = max(0.0, (datetime.now() - last_active).total_seconds() / 86400)
+            if last_active.tzinfo is None:
+                last_active = last_active.replace(tzinfo=clock_now().tzinfo)
+            days_since = max(0.0, (clock_now() - last_active).total_seconds() / 86400)
         except (ValueError, TypeError):
             days_since = 30  # Parse failure → assume 30 days / 解析失败假设已过 30 天
 
