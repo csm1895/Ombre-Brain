@@ -132,6 +132,10 @@ CADENCE_RECEIPT_DIR = os.environ.get(
     "OMBRE_CADENCE_RECEIPT_DIR",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "cadence_receipts"),
 )
+DEEPSEEK_ATTRIBUTION_DIR = os.environ.get(
+    "OMBRE_DEEPSEEK_ATTRIBUTION_DIR",
+    "/app/deepseek_attribution_receipts",
+)
 TAIL_CONTEXT_DIR = os.environ.get(
     "OMBRE_TAIL_CONTEXT_DIR",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "runtime_context"),
@@ -1231,6 +1235,44 @@ def _read_latest_cadence_receipt_summary() -> dict:
             "deepseek_reason": receipt.get("deepseek_reason", ""),
             "draft_path": receipt.get("draft_path", ""),
             "write_scope": receipt.get("write_scope", ""),
+        }
+    except Exception as e:
+        return {"path": path, "error": str(e)}
+
+
+def _latest_deepseek_attribution_receipts(limit: int = 5) -> list[str]:
+    if not os.path.isdir(DEEPSEEK_ATTRIBUTION_DIR):
+        return []
+    files = [
+        os.path.join(DEEPSEEK_ATTRIBUTION_DIR, name)
+        for name in os.listdir(DEEPSEEK_ATTRIBUTION_DIR)
+        if name.endswith(".json")
+    ]
+    files.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+    return files[:limit]
+
+
+def _read_latest_deepseek_attribution_summary() -> dict:
+    latest = _latest_deepseek_attribution_receipts(limit=1)
+    if not latest:
+        return {}
+    path = latest[0]
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            receipt = json.load(handle)
+        return {
+            "path": path,
+            "generated_at": receipt.get("generated_at", ""),
+            "source_layer": receipt.get("source_layer", ""),
+            "source_tool": receipt.get("source_tool", ""),
+            "operation": receipt.get("operation", ""),
+            "called_deepseek": receipt.get("called_deepseek", False),
+            "status": receipt.get("status", ""),
+            "model": receipt.get("model", ""),
+            "bucket_id": receipt.get("bucket_id", ""),
+            "error_message": receipt.get("error_message", ""),
+            "write_scope": receipt.get("write_scope", ""),
+            "private_content_included": receipt.get("private_content_included", True),
         }
     except Exception as e:
         return {"path": path, "error": str(e)}
@@ -2941,25 +2983,45 @@ async def check_logs(lines: int = 50, source: str = "all", keyword: str = "") ->
         return "source 只支持 all / cadence / zeabur / system。"
     keyword = (keyword or "").strip()
     receipt_summary = _read_latest_cadence_receipt_summary()
+    attribution_summary = _read_latest_deepseek_attribution_summary()
     latest_draft = (_latest_cadence_drafts(limit=1) or [""])[0]
 
-    def _cadence_observability_text() -> str:
+    def _deepseek_observability_text() -> str:
+        cadence_called = receipt_summary.get("deepseek_called", False) if receipt_summary else False
+        memory_called = attribution_summary.get("called_deepseek", False) if attribution_summary else False
+        cadence_lines = []
         if not receipt_summary:
-            return (
-                "Cadence observability:\n"
-                "- latest_receipt_path: none\n"
-                f"- latest_cadence_draft_path: {latest_draft or 'none'}\n"
-                "- last_deepseek_called: false\n"
-            )
+            cadence_lines.extend([
+                "- latest_cadence_receipt_path: none",
+                f"- latest_cadence_draft_path: {latest_draft or 'none'}",
+            ])
+        else:
+            cadence_lines.extend([
+                f"- latest_cadence_receipt_path: {receipt_summary.get('path', '')}",
+                f"- latest_receipt_summary: pass_type={receipt_summary.get('pass_type', '')}; "
+                f"status={receipt_summary.get('status', '')}; "
+                f"deepseek_called={receipt_summary.get('deepseek_called', False)}; "
+                f"reason={receipt_summary.get('deepseek_reason', '')}",
+                f"- latest_cadence_draft_path: {receipt_summary.get('draft_path', '') or latest_draft or 'none'}",
+            ])
+        if not attribution_summary:
+            attribution_lines = ["- latest_attribution_receipt_path: none"]
+        else:
+            attribution_lines = [
+                f"- latest_attribution_receipt_path: {attribution_summary.get('path', '')}",
+                f"- latest_attribution_summary: source_tool={attribution_summary.get('source_tool', '')}; "
+                f"operation={attribution_summary.get('operation', '')}; "
+                f"status={attribution_summary.get('status', '')}; "
+                f"called_deepseek={attribution_summary.get('called_deepseek', False)}; "
+                f"write_scope={attribution_summary.get('write_scope', '')}; "
+                f"private_content_included={attribution_summary.get('private_content_included', True)}",
+            ]
         return (
-            "Cadence observability:\n"
-            f"- latest_receipt_path: {receipt_summary.get('path', '')}\n"
-            f"- latest_receipt_summary: pass_type={receipt_summary.get('pass_type', '')}; "
-            f"status={receipt_summary.get('status', '')}; "
-            f"deepseek_called={receipt_summary.get('deepseek_called', False)}; "
-            f"reason={receipt_summary.get('deepseek_reason', '')}\n"
-            f"- latest_cadence_draft_path: {receipt_summary.get('draft_path', '') or latest_draft or 'none'}\n"
-            f"- last_deepseek_called: {receipt_summary.get('deepseek_called', False)}\n"
+            "DeepSeek observability:\n"
+            f"- cadence_last_deepseek_called: {cadence_called}\n"
+            f"- memory_write_last_deepseek_called: {memory_called}\n"
+            + "\n".join(cadence_lines + attribution_lines)
+            + "\n"
         )
     
     log_sources = []
@@ -3026,7 +3088,7 @@ async def check_logs(lines: int = 50, source: str = "all", keyword: str = "") ->
                 f"{uptime_info}\n"
                 f"记忆桶总数: {stats['dynamic_count'] + stats['permanent_count'] + stats['iron_rule_count']}\n"
                 f"衰减引擎: {'运行中' if decay_engine.is_running else '已停止'}\n\n"
-                f"{_cadence_observability_text()}\n"
+                f"{_deepseek_observability_text()}\n"
                 f"💡 提示：source=zeabur 可读取容器 stdout/stderr 本地副本；keyword=error 可过滤关键行。"
             )
         except Exception as e:
@@ -3040,7 +3102,7 @@ async def check_logs(lines: int = 50, source: str = "all", keyword: str = "") ->
     
     return (
         f"🕐 查询时间: {now_cst.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        + _cadence_observability_text()
+        + _deepseek_observability_text()
         + attention_text
         + "\n"
         + "\n\n".join(log_sources)
@@ -3432,6 +3494,17 @@ async def api_logs(request):
         lines = 50
     result = await check_logs(lines=lines, source=source, keyword=keyword)
     return PlainTextResponse(result)
+
+
+@mcp.custom_route("/api/deepseek-attribution/latest", methods=["GET"])
+async def api_latest_deepseek_attribution(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(_read_latest_deepseek_attribution_summary() or {
+        "path": "",
+        "called_deepseek": False,
+        "status": "none",
+    })
 
 
 async def _dual_cadence_loop():

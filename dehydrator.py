@@ -26,14 +26,29 @@
 import re
 import json
 import logging
+import os
+import inspect
 from collections import Counter
 import jieba
 
 from openai import AsyncOpenAI
 
-from utils import count_tokens_approx
+from utils import count_tokens_approx, clock_now
 
 logger = logging.getLogger("ombre_brain.dehydrator")
+
+DEEPSEEK_ATTRIBUTION_DIR = os.environ.get(
+    "OMBRE_DEEPSEEK_ATTRIBUTION_DIR",
+    "/app/deepseek_attribution_receipts",
+)
+
+ATTRIBUTION_SOURCE_TO_SCOPE = {
+    "hold": "memory_write",
+    "grow": "memory_write",
+    "write_diary_draft": "draft_only",
+    "enqueue_night_clean_input": "draft_only",
+    "write_project_workzone_update": "project_workzone",
+}
 
 
 # --- Dehydration prompt: instructs cheap LLM to compress information ---
@@ -172,6 +187,57 @@ class Dehydrator:
         else:
             self.client = None
 
+    def _infer_source_tool(self) -> str:
+        known = set(ATTRIBUTION_SOURCE_TO_SCOPE)
+        try:
+            for frame in inspect.stack()[2:20]:
+                if frame.function in known:
+                    return frame.function
+        except Exception:
+            pass
+        return "unknown"
+
+    def _write_attribution_receipt(
+        self,
+        *,
+        operation: str,
+        called_deepseek: bool,
+        status: str,
+        error_message: str = "",
+        bucket_id: str = "",
+    ) -> None:
+        source_tool = self._infer_source_tool()
+        now = clock_now()
+        receipt = {
+            "schema_version": "deepseek_attribution_receipt_v1",
+            "generated_at": now.isoformat(),
+            "source_layer": "memory_write_dehydrator",
+            "source_tool": source_tool,
+            "operation": operation or "unknown",
+            "called_deepseek": bool(called_deepseek),
+            "status": status,
+            "model": self.model if called_deepseek else "",
+            "bucket_id": bucket_id or "",
+            "error_message": str(error_message or "")[:300],
+            "write_scope": ATTRIBUTION_SOURCE_TO_SCOPE.get(source_tool, "unknown"),
+            "private_content_included": False,
+        }
+        try:
+            os.makedirs(DEEPSEEK_ATTRIBUTION_DIR, exist_ok=True)
+            stamp = now.strftime("%Y%m%d_%H%M%S_%f")
+            safe_source = re.sub(r"[^a-zA-Z0-9_-]+", "_", source_tool)[:48] or "unknown"
+            safe_operation = re.sub(r"[^a-zA-Z0-9_-]+", "_", operation or "unknown")[:32]
+            path = os.path.join(
+                DEEPSEEK_ATTRIBUTION_DIR,
+                f"{stamp}_{safe_source}_{safe_operation}.json",
+            )
+            tmp_path = f"{path}.tmp"
+            with open(tmp_path, "w", encoding="utf-8") as handle:
+                json.dump(receipt, handle, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, path)
+        except Exception as e:
+            logger.warning(f"DeepSeek attribution receipt write failed: {e}")
+
     # ---------------------------------------------------------
     # Dehydrate: compress raw content into concise summary
     # 脱水：将原始内容压缩为精简摘要
@@ -186,11 +252,23 @@ class Dehydrator:
         返回格式化的摘要字符串，可直接注入 Claude 上下文。
         """
         if not content or not content.strip():
+            self._write_attribution_receipt(
+                operation="summarize",
+                called_deepseek=False,
+                status="skipped",
+                error_message="empty_content",
+            )
             return "（空记忆 / empty memory）"
 
         # --- Content is short enough, no compression needed ---
         # --- 内容已经很短，不需要压缩 ---
         if count_tokens_approx(content) < 100:
+            self._write_attribution_receipt(
+                operation="summarize",
+                called_deepseek=False,
+                status="skipped",
+                error_message="short_content_local_format",
+            )
             return self._format_output(content, metadata)
 
         # --- Try API compression first (best quality) ---
@@ -199,12 +277,36 @@ class Dehydrator:
             try:
                 result = await self._api_dehydrate(content)
                 if result:
+                    self._write_attribution_receipt(
+                        operation="summarize",
+                        called_deepseek=True,
+                        status="success",
+                    )
                     return self._format_output(result, metadata)
+                self._write_attribution_receipt(
+                    operation="summarize",
+                    called_deepseek=True,
+                    status="error",
+                    error_message="empty_response",
+                )
             except Exception as e:
+                self._write_attribution_receipt(
+                    operation="summarize",
+                    called_deepseek=True,
+                    status="error",
+                    error_message=str(e),
+                )
                 logger.warning(
                     f"API dehydration failed, degrading to local / "
                     f"API 脱水失败，降级到本地压缩: {e}"
                 )
+        else:
+            self._write_attribution_receipt(
+                operation="summarize",
+                called_deepseek=False,
+                status="skipped",
+                error_message="api_unavailable",
+            )
 
         # --- Local compression fallback (works without API) ---
         # --- 本地压缩兜底 ---
@@ -232,12 +334,36 @@ class Dehydrator:
             try:
                 result = await self._api_merge(old_content, new_content)
                 if result:
+                    self._write_attribution_receipt(
+                        operation="merge",
+                        called_deepseek=True,
+                        status="success",
+                    )
                     return result
+                self._write_attribution_receipt(
+                    operation="merge",
+                    called_deepseek=True,
+                    status="error",
+                    error_message="empty_response",
+                )
             except Exception as e:
+                self._write_attribution_receipt(
+                    operation="merge",
+                    called_deepseek=True,
+                    status="error",
+                    error_message=str(e),
+                )
                 logger.warning(
                     f"API merge failed, degrading to local / "
                     f"API 合并失败，降级到本地合并: {e}"
                 )
+        else:
+            self._write_attribution_receipt(
+                operation="merge",
+                called_deepseek=False,
+                status="skipped",
+                error_message="api_unavailable",
+            )
 
         # --- Local merge fallback / 本地合并兜底 ---
         return self._local_merge(old_content, new_content)
@@ -441,6 +567,12 @@ class Dehydrator:
         Returns: {"domain", "valence", "arousal", "tags", "suggested_name"}
         """
         if not content or not content.strip():
+            self._write_attribution_receipt(
+                operation="analyze",
+                called_deepseek=False,
+                status="skipped",
+                error_message="empty_content",
+            )
             return self._default_analysis()
 
         # --- Try API first (best quality) / 优先走 API ---
@@ -448,12 +580,36 @@ class Dehydrator:
             try:
                 result = await self._api_analyze(content)
                 if result:
+                    self._write_attribution_receipt(
+                        operation="analyze",
+                        called_deepseek=True,
+                        status="success",
+                    )
                     return result
+                self._write_attribution_receipt(
+                    operation="analyze",
+                    called_deepseek=True,
+                    status="error",
+                    error_message="empty_response",
+                )
             except Exception as e:
+                self._write_attribution_receipt(
+                    operation="analyze",
+                    called_deepseek=True,
+                    status="error",
+                    error_message=str(e),
+                )
                 logger.warning(
                     f"API tagging failed, degrading to local / "
                     f"API 打标失败，降级到本地分析: {e}"
                 )
+        else:
+            self._write_attribution_receipt(
+                operation="analyze",
+                called_deepseek=False,
+                status="skipped",
+                error_message="api_unavailable",
+            )
 
         # --- Local analysis fallback / 本地分析兜底 ---
         return self._local_analyze(content)
@@ -664,6 +820,12 @@ class Dehydrator:
         Returns: [{"name", "content", "domain", "valence", "arousal", "tags", "importance"}, ...]
         """
         if not content or not content.strip():
+            self._write_attribution_receipt(
+                operation="digest",
+                called_deepseek=False,
+                status="skipped",
+                error_message="empty_content",
+            )
             return []
 
         # --- Try API digest first (best quality, understands semantic splits) ---
@@ -672,12 +834,36 @@ class Dehydrator:
             try:
                 result = await self._api_digest(content)
                 if result:
+                    self._write_attribution_receipt(
+                        operation="digest",
+                        called_deepseek=True,
+                        status="success",
+                    )
                     return result
+                self._write_attribution_receipt(
+                    operation="digest",
+                    called_deepseek=True,
+                    status="error",
+                    error_message="empty_response",
+                )
             except Exception as e:
+                self._write_attribution_receipt(
+                    operation="digest",
+                    called_deepseek=True,
+                    status="error",
+                    error_message=str(e),
+                )
                 logger.warning(
                     f"API diary digest failed, degrading to local / "
                     f"API 日记整理失败，降级到本地拆分: {e}"
                 )
+        else:
+            self._write_attribution_receipt(
+                operation="digest",
+                called_deepseek=False,
+                status="skipped",
+                error_message="api_unavailable",
+            )
 
         # --- Local split fallback / 本地拆分兜底 ---
         return await self._local_digest(content)
