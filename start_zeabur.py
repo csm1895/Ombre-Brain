@@ -47,8 +47,6 @@ def _start_tailscale_if_configured(log_file) -> subprocess.Popen | None:
     if result.returncode == 0:
         os.environ.setdefault("HTTP_PROXY", TAILSCALE_PROXY)
         os.environ.setdefault("http_proxy", TAILSCALE_PROXY)
-        os.environ.setdefault("ALL_PROXY", TAILSCALE_PROXY.replace("http://", "socks5://"))
-        os.environ.setdefault("all_proxy", TAILSCALE_PROXY.replace("http://", "socks5://"))
         os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1,::1")
         os.environ.setdefault("no_proxy", "localhost,127.0.0.1,::1")
     return tailscaled
