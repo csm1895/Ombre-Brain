@@ -166,6 +166,8 @@ _cadence_last_activity_ts = time.time()
 _cadence_last_idle_run_ts = 0.0
 _cadence_last_night_run_date = ""
 _cadence_last_report = {}
+_cadence_last_check_time = ""
+_cadence_last_skip_reason = "not_checked"
 
 
 # --- CC auto-reply config / CC 自动回复配置 ---
@@ -3516,6 +3518,10 @@ async def api_cadence_status(request):
         "idle_minutes": CADENCE_IDLE_MINUTES,
         "night_window": [CADENCE_NIGHT_START_HOUR, CADENCE_NIGHT_END_HOUR],
         "night_min_idle_minutes": CADENCE_NIGHT_MIN_IDLE_MINUTES,
+        "deepseek_enabled": CADENCE_DEEPSEEK_ENABLED,
+        "check_interval_seconds": CADENCE_CHECK_INTERVAL_SECONDS,
+        "last_check_time": _cadence_last_check_time,
+        "last_skip_reason": _cadence_last_skip_reason,
         "last_activity_age_seconds": round(_cadence_recent_idle_seconds(), 1),
         "last_idle_run_ts": _cadence_last_idle_run_ts,
         "last_night_run_date": _cadence_last_night_run_date,
@@ -3658,24 +3664,63 @@ async def browser_sse_root_compat_proxy(request):
 
 
 async def _dual_cadence_loop():
+    global _cadence_last_check_time, _cadence_last_skip_reason
+
     await asyncio.sleep(20)
     while True:
         try:
             if CADENCE_ENABLED:
                 now_cst = clock_now()
                 quiet_seconds = _cadence_recent_idle_seconds()
-                if (
-                    _cadence_is_night_window(now_cst)
-                    and quiet_seconds >= (CADENCE_NIGHT_MIN_IDLE_MINUTES * 60)
-                    and _cadence_last_night_run_date != now_cst.strftime("%Y-%m-%d")
-                ):
+                quiet_minutes = round(quiet_seconds / 60, 1)
+                in_night_window = _cadence_is_night_window(now_cst)
+                night_gate_open = in_night_window and quiet_seconds >= (CADENCE_NIGHT_MIN_IDLE_MINUTES * 60)
+                idle_gate_open = quiet_seconds >= (CADENCE_IDLE_MINUTES * 60)
+                gate_open = night_gate_open or idle_gate_open
+                skip_reason = "not_skipped"
+
+                if night_gate_open and _cadence_last_night_run_date != now_cst.strftime("%Y-%m-%d"):
                     await _run_cadence_pass(mode="night", reason="night_window")
-                elif (
-                    quiet_seconds >= (CADENCE_IDLE_MINUTES * 60)
-                    and _cadence_last_idle_run_ts < _cadence_last_activity_ts
-                ):
+                elif idle_gate_open and _cadence_last_idle_run_ts < _cadence_last_activity_ts:
                     await _run_cadence_pass(mode="idle", reason="idle_window")
+                else:
+                    if in_night_window and not night_gate_open:
+                        skip_reason = "night_idle_gate_closed"
+                    elif in_night_window and _cadence_last_night_run_date == now_cst.strftime("%Y-%m-%d"):
+                        skip_reason = "night_already_ran_today"
+                    elif not idle_gate_open:
+                        skip_reason = "idle_gate_closed"
+                    else:
+                        skip_reason = "idle_already_ran_for_current_activity"
+
+                _cadence_last_check_time = now_cst.isoformat()
+                _cadence_last_skip_reason = skip_reason
+                _append_cadence_log([
+                    f"[{now_cst.strftime('%Y-%m-%d %H:%M:%S')}] scheduler_check "
+                    f"quiet_minutes={quiet_minutes} "
+                    f"night_window={in_night_window} "
+                    f"gate_open={gate_open} "
+                    f"skip_reason={skip_reason} "
+                    f"deepseek_enabled={CADENCE_DEEPSEEK_ENABLED}",
+                ])
+            else:
+                now_cst = clock_now()
+                _cadence_last_check_time = now_cst.isoformat()
+                _cadence_last_skip_reason = "cadence_disabled"
+                _append_cadence_log([
+                    f"[{now_cst.strftime('%Y-%m-%d %H:%M:%S')}] scheduler_check "
+                    "quiet_minutes=0.0 night_window=False gate_open=False "
+                    f"skip_reason=cadence_disabled deepseek_enabled={CADENCE_DEEPSEEK_ENABLED}",
+                ])
         except Exception as e:
+            now_cst = clock_now()
+            _cadence_last_check_time = now_cst.isoformat()
+            _cadence_last_skip_reason = f"error:{e}"
+            _append_cadence_log([
+                f"[{now_cst.strftime('%Y-%m-%d %H:%M:%S')}] scheduler_check "
+                "quiet_minutes=0.0 night_window=False gate_open=False "
+                f"skip_reason=error:{e} deepseek_enabled={CADENCE_DEEPSEEK_ENABLED}",
+            ])
             logger.warning(f"Dual cadence loop skipped / 双节奏循环跳过: {e}")
 
         await asyncio.sleep(CADENCE_CHECK_INTERVAL_SECONDS)
