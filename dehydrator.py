@@ -37,9 +37,19 @@ from utils import count_tokens_approx, clock_now
 
 logger = logging.getLogger("ombre_brain.dehydrator")
 
+def _default_attribution_dir() -> str:
+    runtime_base = os.environ.get("OMBRE_RUNTIME_DIR")
+    if runtime_base:
+        return os.path.join(runtime_base, "deepseek_attribution_receipts")
+    bucket_base = os.environ.get("OMBRE_BUCKETS_DIR")
+    if bucket_base:
+        return os.path.join(bucket_base, "_runtime", "deepseek_attribution_receipts")
+    return "/app/deepseek_attribution_receipts"
+
+
 DEEPSEEK_ATTRIBUTION_DIR = os.environ.get(
     "OMBRE_DEEPSEEK_ATTRIBUTION_DIR",
-    "/app/deepseek_attribution_receipts",
+    _default_attribution_dir(),
 )
 
 ATTRIBUTION_SOURCE_TO_SCOPE = {

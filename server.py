@@ -88,6 +88,15 @@ mcp = FastMCP(
 NOTES_DIR = os.path.join(config.get("buckets_dir", os.path.join(os.path.dirname(os.path.abspath(__file__)), "buckets")), "notes")
 os.makedirs(NOTES_DIR, exist_ok=True)
 
+
+def _runtime_storage_base() -> str:
+    bucket_base = (
+        os.environ.get("OMBRE_BUCKETS_DIR")
+        or config.get("buckets_dir")
+        or os.path.join(os.path.dirname(os.path.abspath(__file__)), "buckets")
+    )
+    return os.environ.get("OMBRE_RUNTIME_DIR", os.path.join(bucket_base, "_runtime"))
+
 # --- CC online status tracking / CC 在线状态追踪 ---
 # CC heartbeats every 2 min; if no heartbeat for 5 min, considered offline
 CC_HEARTBEAT_TIMEOUT = int(os.environ.get("CC_HEARTBEAT_TIMEOUT", "300"))
@@ -108,9 +117,10 @@ _runtime_ready_last_error = ""
 
 # --- Dual-cadence draft-only execution / 双节奏草稿执行 ---
 CADENCE_ENABLED = os.environ.get("OMBRE_DUAL_CADENCE_ENABLED", "1").lower() not in ("0", "false", "no")
+RUNTIME_STORAGE_DIR = _runtime_storage_base()
 CADENCE_DRAFT_DIR = os.environ.get(
     "OMBRE_CADENCE_DRAFT_DIR",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "cadence_drafts"),
+    os.path.join(RUNTIME_STORAGE_DIR, "cadence_drafts"),
 )
 CADENCE_LOG_PATH = os.environ.get(
     "OMBRE_CADENCE_LOG_PATH",
@@ -130,15 +140,15 @@ CADENCE_REVIEW_DIR = os.environ.get(
 )
 CADENCE_RECEIPT_DIR = os.environ.get(
     "OMBRE_CADENCE_RECEIPT_DIR",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "cadence_receipts"),
+    os.path.join(RUNTIME_STORAGE_DIR, "cadence_receipts"),
 )
 DEEPSEEK_ATTRIBUTION_DIR = os.environ.get(
     "OMBRE_DEEPSEEK_ATTRIBUTION_DIR",
-    "/app/deepseek_attribution_receipts",
+    os.path.join(RUNTIME_STORAGE_DIR, "deepseek_attribution_receipts"),
 )
 TAIL_CONTEXT_DIR = os.environ.get(
     "OMBRE_TAIL_CONTEXT_DIR",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "runtime_context"),
+    os.path.join(RUNTIME_STORAGE_DIR, "tail_context"),
 )
 TAIL_CONTEXT_PATH = os.environ.get(
     "OMBRE_TAIL_CONTEXT_PATH",
