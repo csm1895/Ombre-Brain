@@ -1547,6 +1547,11 @@ def _latest_dream_text() -> str:
     return _strip_frontmatter_text(text)
 
 
+def _latest_dream_path() -> str:
+    latest_path = os.path.join(CADENCE_DREAM_DIR, "latest_dream.md")
+    return latest_path if os.path.isfile(latest_path) else ""
+
+
 def _dream_source_hint() -> str:
     receipt = _read_latest_cadence_receipt_summary()
     if receipt:
@@ -1636,6 +1641,29 @@ async def morning_report() -> str:
         f"latest_deepseek_reason: {receipt.get('deepseek_reason', '') if receipt else ''}\n"
         f"latest_draft_path: {receipt.get('draft_path', '') if receipt else latest_draft}\n"
         "note: factual summary only; not a dream.\n"
+    )
+
+
+@mcp.tool()
+async def read_latest_dream_text() -> str:
+    """读取最新 cadence dream 文件正文；只读，不写主脑。"""
+    _mark_runtime_activity("read_latest_dream_text")
+    dream_path = _latest_dream_path()
+    if not dream_path:
+        return (
+            "latest_dream_text\n"
+            "status: none\n"
+            "write_scope: read_only\n"
+        )
+    body = _latest_dream_text()
+    return (
+        "latest_dream_text\n"
+        f"path: {dream_path}\n"
+        "status: found\n"
+        "write_scope: read_only\n"
+        "dream_only: true\n"
+        "main_brain_write: false\n\n"
+        f"{body or '（空梦文件）'}"
     )
 
 
@@ -2908,6 +2936,32 @@ async def list_diary_reviews(limit: int = 10) -> str:
         snippet = strip_wikilinks(body).replace("\n", " ").strip()[:220]
         rows.append(f"- review_id: {os.path.basename(path)}\n  preview: {snippet or '（空候选）'}")
     return "待验收日记候选：\n" + "\n".join(rows)
+
+
+@mcp.tool()
+async def read_diary_review(review_id: str) -> str:
+    """读取待验收日记候选正文；只读，不验收、不写主脑。"""
+    _mark_runtime_activity("read_diary_review")
+    safe_id = _safe_review_id(review_id)
+    if not safe_id:
+        return "review_id 不能为空。"
+    source_path = _pending_review_path(safe_id)
+    if not os.path.isfile(source_path):
+        return f"未找到待验收候选: {safe_id}"
+    try:
+        text = _tail_text_file(source_path, 2000).strip()
+        body = _strip_frontmatter_text(text)
+        return (
+            "diary_review_text\n"
+            f"review_id: {safe_id}\n"
+            f"path: {source_path}\n"
+            "status: found\n"
+            "write_scope: read_only\n"
+            "main_brain_write: false\n\n"
+            f"{body or '（空候选）'}"
+        )
+    except Exception as e:
+        return f"读取待验收候选失败: {e}"
 
 
 @mcp.tool()
