@@ -32,6 +32,7 @@ COPY buckets ./buckets
 # Default to streamable-http for container (remote access)
 # 容器场景默认用 streamable-http
 ENV OMBRE_TRANSPORT=streamable-http
+ENV OMBRE_CADENCE_DEEPSEEK_ENABLED=1
 
 EXPOSE 8000
 
