@@ -169,6 +169,13 @@ _cadence_last_report = {}
 _cadence_last_check_time = ""
 _cadence_last_skip_reason = "not_checked"
 
+BRAIN_OWNER = os.environ.get("BRAIN_OWNER", os.environ.get("OMBRE_BRAIN_OWNER", "未配置"))
+NARRATOR = os.environ.get("NARRATOR", os.environ.get("OMBRE_NARRATOR", BRAIN_OWNER))
+DIARY_REVIEW_NARRATOR = NARRATOR
+DIARY_REVIEW_BRAIN_OWNER = BRAIN_OWNER
+DIARY_REVIEW_MENTIONED_ENTITIES = os.environ.get("DIARY_REVIEW_MENTIONED_ENTITIES", f"倩倩,{DIARY_REVIEW_NARRATOR}")
+DIARY_REVIEW_LAID_ENTITIES = os.environ.get("LAID_ENTITIES", os.environ.get("DIARY_REVIEW_LAID_ENTITIES", DIARY_REVIEW_MENTIONED_ENTITIES))
+
 
 # --- CC auto-reply config / CC 自动回复配置 ---
 CC_API_KEY = os.environ.get("CC_API_KEY", os.environ.get("OMBRE_API_KEY", ""))
@@ -1060,27 +1067,41 @@ def _diary_review_risk_flags(text: str) -> list[str]:
     normalized = strip_wikilinks(text or "")
     compact = normalized.replace(" ", "")
     flags = []
-    conflict_patterns = [
-        "我是顾砚深",
-        "我叫顾砚深",
-        "作为顾砚深",
-        "以顾砚深",
-        "顾砚深的日记",
-        "顾砚深日记",
-    ]
-    if any(pattern in compact for pattern in conflict_patterns):
-        flags.append("identity_pov_conflict")
-    return flags
+    expected = {DIARY_REVIEW_NARRATOR, DIARY_REVIEW_BRAIN_OWNER} - {"", "未配置"}
+    if not expected:
+        flags.append("identity_env_unconfigured")
+        return flags
+
+    # Only trust the runtime identity configured for this service. If model output
+    # carries explicit metadata for another narrator/owner, block review acceptance.
+    frontmatter = _simple_frontmatter(text or "")
+    for key, expected_value in (
+        ("narrator", DIARY_REVIEW_NARRATOR),
+        ("brain_owner", DIARY_REVIEW_BRAIN_OWNER),
+    ):
+        value = frontmatter.get(key, "").strip()
+        if value and value != expected_value:
+            flags.append("identity_pov_conflict")
+
+    for key in ("narrator:", "brain_owner:"):
+        marker_index = compact.find(key)
+        if marker_index >= 0:
+            marker_tail = compact[marker_index + len(key): marker_index + len(key) + 24]
+            if not any(marker_tail.startswith(identity) for identity in expected):
+                flags.append("identity_pov_conflict")
+
+    return sorted(set(flags))
 
 
 def _diary_review_metadata(candidate_text: str) -> dict[str, str]:
     risk_flags = _diary_review_risk_flags(candidate_text)
     return {
-        "narrator": "叶辰一",
-        "brain_owner": "叶辰一",
-        "mentioned_entities": "倩倩,叶辰一",
+        "narrator": DIARY_REVIEW_NARRATOR,
+        "brain_owner": DIARY_REVIEW_BRAIN_OWNER,
+        "mentioned_entities": DIARY_REVIEW_MENTIONED_ENTITIES,
+        "laid_entities": DIARY_REVIEW_LAID_ENTITIES,
         "risk_flags": ",".join(risk_flags) if risk_flags else "none",
-        "review_level": "blocked" if "identity_pov_conflict" in risk_flags else "normal",
+        "review_level": "blocked" if risk_flags else "normal",
     }
 
 
@@ -1101,6 +1122,7 @@ def _write_diary_review_candidate(candidate_path: str, timestamp: str, mode: str
         f"narrator: {review_meta['narrator']}",
         f"brain_owner: {review_meta['brain_owner']}",
         f"mentioned_entities: {review_meta['mentioned_entities']}",
+        f"laid_entities: {review_meta['laid_entities']}",
         f"risk_flags: {review_meta['risk_flags']}",
         f"review_level: {review_meta['review_level']}",
         f"candidate_path: {candidate_path}",
@@ -1370,8 +1392,8 @@ async def _run_cadence_deepseek_candidate(
         "Draft only. Never write main brain facts. Never promote to core/recent. "
         "Never create iron rules, redlines, or personality boundary mutations.\n"
         "Preserve uncertainty. Keep life/diary continuity primary; engineering only supportive.\n"
-        "Write diary-like material strictly in first person as 叶辰一: use 我, 我和她, 她. "
-        "The brain owner and narrator are always 叶辰一. Other AIs or windows may be mentioned entities, "
+        f"Write diary-like material strictly in first person as {DIARY_REVIEW_NARRATOR}: use 我, 我和她, 她. "
+        f"The brain owner and narrator are always {DIARY_REVIEW_BRAIN_OWNER}. Other AIs or windows may be mentioned entities, "
         "but they must never become the narrator, brain owner, or first-person speaker.\n"
         "Separate original facts, paraphrase, and inference. Do not say AI, user, assistant, the user, "
         "or third-person summaries when describing the relationship.\n"
@@ -1386,8 +1408,8 @@ async def _run_cadence_deepseek_candidate(
         "status=candidate\n"
         "source=cadence_deepseek\n\n"
         "Below is the bounded local cadence draft source. Rewrite it into a cleaner candidate note "
-        "for next-day review. Use first person as 叶辰一, with 我/我和她/她 as the relationship frame. "
-        "If the source mentions 顾砚深, 陈光, DeepSeek, Codex, or other windows, keep them as mentioned entities only. "
+        f"for next-day review. Use first person as {DIARY_REVIEW_NARRATOR}, with 我/我和她/她 as the relationship frame. "
+        "If the source mentions another AI, 陈光, DeepSeek, Codex, or other windows, keep them as mentioned entities only. "
         "Do not write as them and do not merge their point of view into mine. "
         "Include relationship state, emotional movement, unfinished topics, my judgment at the time, and her state. "
         "Do not invent facts, do not issue commands, do not claim any main-brain write.\n\n"
@@ -1420,8 +1442,9 @@ async def _run_cadence_deepseek_candidate(
         "main_brain_write: false",
         "auto_promotion: false",
         "personality_boundary_mutation: false",
-        "narrator: 叶辰一",
-        "brain_owner: 叶辰一",
+        f"narrator: {DIARY_REVIEW_NARRATOR}",
+        f"brain_owner: {DIARY_REVIEW_BRAIN_OWNER}",
+        f"laid_entities: {DIARY_REVIEW_LAID_ENTITIES}",
         "pov_rule: other_ai_as_mentioned_entities_only",
         f"generated_at: {now_cst.isoformat()}",
         "---",
@@ -3011,6 +3034,7 @@ async def list_diary_reviews(limit: int = 10) -> str:
             f"  review_level: {meta.get('review_level', 'unknown')}\n"
             f"  risk_flags: {meta.get('risk_flags', 'unknown')}\n"
             f"  mentioned_entities: {meta.get('mentioned_entities', 'unknown')}\n"
+            f"  laid_entities: {meta.get('laid_entities', 'unknown')}\n"
             f"  preview: {snippet or '（空候选）'}"
         )
     return "待验收日记候选：\n" + "\n".join(rows)
@@ -3042,7 +3066,8 @@ async def read_diary_review(review_id: str) -> str:
             f"- brain_owner: {meta.get('brain_owner', 'unknown')}\n"
             f"- review_level: {meta.get('review_level', 'unknown')}\n"
             f"- risk_flags: {meta.get('risk_flags', 'unknown')}\n"
-            f"- mentioned_entities: {meta.get('mentioned_entities', 'unknown')}\n\n"
+            f"- mentioned_entities: {meta.get('mentioned_entities', 'unknown')}\n"
+            f"- laid_entities: {meta.get('laid_entities', 'unknown')}\n\n"
             f"{body or '（空候选）'}"
         )
     except Exception as e:
@@ -3073,7 +3098,12 @@ async def accept_diary_review(review_id: str) -> str:
         body = text.split("---", 2)[2].strip() if text.startswith("---") and len(text.split("---", 2)) == 3 else text
         bucket_id = await bucket_mgr.create(
             content=body or "（空日记候选）",
-            tags=["diary_review_accepted", "cadence_candidate", "narrator_叶辰一", "brain_owner_叶辰一"],
+            tags=[
+                "diary_review_accepted",
+                "cadence_candidate",
+                f"narrator_{DIARY_REVIEW_NARRATOR}",
+                f"brain_owner_{DIARY_REVIEW_BRAIN_OWNER}",
+            ],
             importance=5,
             domain=["日记"],
             valence=0.5,
