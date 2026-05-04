@@ -1041,6 +1041,49 @@ def _pending_review_path(review_id: str) -> str:
     return os.path.join(_cadence_review_dirs()["pending"], _safe_review_id(review_id))
 
 
+def _simple_frontmatter(text: str) -> dict[str, str]:
+    if not text.startswith("---"):
+        return {}
+    parts = text.split("---", 2)
+    if len(parts) != 3:
+        return {}
+    meta = {}
+    for line in parts[1].splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        meta[key.strip()] = value.strip().strip('"')
+    return meta
+
+
+def _diary_review_risk_flags(text: str) -> list[str]:
+    normalized = strip_wikilinks(text or "")
+    compact = normalized.replace(" ", "")
+    flags = []
+    conflict_patterns = [
+        "我是顾砚深",
+        "我叫顾砚深",
+        "作为顾砚深",
+        "以顾砚深",
+        "顾砚深的日记",
+        "顾砚深日记",
+    ]
+    if any(pattern in compact for pattern in conflict_patterns):
+        flags.append("identity_pov_conflict")
+    return flags
+
+
+def _diary_review_metadata(candidate_text: str) -> dict[str, str]:
+    risk_flags = _diary_review_risk_flags(candidate_text)
+    return {
+        "narrator": "叶辰一",
+        "brain_owner": "叶辰一",
+        "mentioned_entities": "倩倩,叶辰一",
+        "risk_flags": ",".join(risk_flags) if risk_flags else "none",
+        "review_level": "blocked" if "identity_pov_conflict" in risk_flags else "normal",
+    }
+
+
 def _write_diary_review_candidate(candidate_path: str, timestamp: str, mode: str, now_cst: datetime) -> str:
     dirs = _cadence_review_dirs()
     os.makedirs(dirs["pending"], exist_ok=True)
@@ -1048,12 +1091,18 @@ def _write_diary_review_candidate(candidate_path: str, timestamp: str, mode: str
     review_path = os.path.join(dirs["pending"], review_id)
     with open(candidate_path, "r", encoding="utf-8") as source:
         candidate_text = source.read().strip()
+    review_meta = _diary_review_metadata(candidate_text)
     review_lines = [
         "---",
         "source: cadence_deepseek",
         "status: pending_diary_review",
         "write_scope: draft_only_until_accept",
         "main_brain_write: false",
+        f"narrator: {review_meta['narrator']}",
+        f"brain_owner: {review_meta['brain_owner']}",
+        f"mentioned_entities: {review_meta['mentioned_entities']}",
+        f"risk_flags: {review_meta['risk_flags']}",
+        f"review_level: {review_meta['review_level']}",
         f"candidate_path: {candidate_path}",
         f"created_at: {now_cst.isoformat()}",
         "---",
@@ -1321,8 +1370,11 @@ async def _run_cadence_deepseek_candidate(
         "Draft only. Never write main brain facts. Never promote to core/recent. "
         "Never create iron rules, redlines, or personality boundary mutations.\n"
         "Preserve uncertainty. Keep life/diary continuity primary; engineering only supportive.\n"
-        "Write diary-like material strictly in first person as 顾砚深: use 我, 我和她, 她. "
-        "Do not say AI, user, assistant, the user, or third-person summaries when describing the relationship.\n"
+        "Write diary-like material strictly in first person as 叶辰一: use 我, 我和她, 她. "
+        "The brain owner and narrator are always 叶辰一. Other AIs or windows may be mentioned entities, "
+        "but they must never become the narrator, brain owner, or first-person speaker.\n"
+        "Separate original facts, paraphrase, and inference. Do not say AI, user, assistant, the user, "
+        "or third-person summaries when describing the relationship.\n"
         "The candidate must include: relationship state, emotional movement, unfinished topics, "
         "my judgment at the time, and her state.\n"
         "Output concise markdown only."
@@ -1334,7 +1386,9 @@ async def _run_cadence_deepseek_candidate(
         "status=candidate\n"
         "source=cadence_deepseek\n\n"
         "Below is the bounded local cadence draft source. Rewrite it into a cleaner candidate note "
-        "for next-day review. Use first person as 顾砚深, with 我/我和她/她 as the relationship frame. "
+        "for next-day review. Use first person as 叶辰一, with 我/我和她/她 as the relationship frame. "
+        "If the source mentions 顾砚深, 陈光, DeepSeek, Codex, or other windows, keep them as mentioned entities only. "
+        "Do not write as them and do not merge their point of view into mine. "
         "Include relationship state, emotional movement, unfinished topics, my judgment at the time, and her state. "
         "Do not invent facts, do not issue commands, do not claim any main-brain write.\n\n"
         f"{bounded_input}"
@@ -1366,6 +1420,9 @@ async def _run_cadence_deepseek_candidate(
         "main_brain_write: false",
         "auto_promotion: false",
         "personality_boundary_mutation: false",
+        "narrator: 叶辰一",
+        "brain_owner: 叶辰一",
+        "pov_rule: other_ai_as_mentioned_entities_only",
         f"generated_at: {now_cst.isoformat()}",
         "---",
         "",
@@ -2944,9 +3001,18 @@ async def list_diary_reviews(limit: int = 10) -> str:
             text = _tail_text_file(path, 80).strip()
         except Exception:
             text = ""
+        meta = _simple_frontmatter(text)
         body = text.split("---", 2)[2].strip() if text.startswith("---") and len(text.split("---", 2)) == 3 else text
         snippet = strip_wikilinks(body).replace("\n", " ").strip()[:220]
-        rows.append(f"- review_id: {os.path.basename(path)}\n  preview: {snippet or '（空候选）'}")
+        rows.append(
+            f"- review_id: {os.path.basename(path)}\n"
+            f"  narrator: {meta.get('narrator', 'unknown')}\n"
+            f"  brain_owner: {meta.get('brain_owner', 'unknown')}\n"
+            f"  review_level: {meta.get('review_level', 'unknown')}\n"
+            f"  risk_flags: {meta.get('risk_flags', 'unknown')}\n"
+            f"  mentioned_entities: {meta.get('mentioned_entities', 'unknown')}\n"
+            f"  preview: {snippet or '（空候选）'}"
+        )
     return "待验收日记候选：\n" + "\n".join(rows)
 
 
@@ -2962,6 +3028,7 @@ async def read_diary_review(review_id: str) -> str:
         return f"未找到待验收候选: {safe_id}"
     try:
         text = _tail_text_file(source_path, 2000).strip()
+        meta = _simple_frontmatter(text)
         body = _strip_frontmatter_text(text)
         return (
             "diary_review_text\n"
@@ -2970,6 +3037,12 @@ async def read_diary_review(review_id: str) -> str:
             "status: found\n"
             "write_scope: read_only\n"
             "main_brain_write: false\n\n"
+            "metadata:\n"
+            f"- narrator: {meta.get('narrator', 'unknown')}\n"
+            f"- brain_owner: {meta.get('brain_owner', 'unknown')}\n"
+            f"- review_level: {meta.get('review_level', 'unknown')}\n"
+            f"- risk_flags: {meta.get('risk_flags', 'unknown')}\n"
+            f"- mentioned_entities: {meta.get('mentioned_entities', 'unknown')}\n\n"
             f"{body or '（空候选）'}"
         )
     except Exception as e:
@@ -2988,10 +3061,19 @@ async def accept_diary_review(review_id: str) -> str:
         return f"未找到待验收候选: {safe_id}"
     try:
         text = _tail_text_file(source_path, 2000).strip()
+        meta = _simple_frontmatter(text)
+        risk_flags = meta.get("risk_flags", "")
+        review_level = meta.get("review_level", "")
+        if "identity_pov_conflict" in risk_flags or review_level == "blocked":
+            return (
+                f"候选存在身份视角风险，已阻止收入: {safe_id}\n"
+                f"risk_flags: {risk_flags or 'unknown'}\n"
+                "请先 reject_diary_review，或重新生成修正后的候选。"
+            )
         body = text.split("---", 2)[2].strip() if text.startswith("---") and len(text.split("---", 2)) == 3 else text
         bucket_id = await bucket_mgr.create(
             content=body or "（空日记候选）",
-            tags=["diary_review_accepted", "cadence_candidate"],
+            tags=["diary_review_accepted", "cadence_candidate", "narrator_叶辰一", "brain_owner_叶辰一"],
             importance=5,
             domain=["日记"],
             valence=0.5,
