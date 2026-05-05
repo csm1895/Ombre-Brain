@@ -845,7 +845,7 @@ async def _write_wrapper_candidate(
     importance: int,
     metadata: dict,
     fallback_name: str,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     """Minimal wrapper write path: create dynamic candidate bucket, then patch metadata."""
     await decay_engine.ensure_started()
 
@@ -865,6 +865,14 @@ async def _write_wrapper_candidate(
         }
 
     all_tags = list(dict.fromkeys((analysis.get("tags", []) or []) + extra_tags))
+    metadata = {
+        **metadata,
+        "source_platform": metadata.get("source_platform", "unknown"),
+        "source_surface": metadata.get("source_surface", "unknown"),
+        "source_window": metadata.get("source_window", "unknown"),
+        "source_mode": metadata.get("source_mode", "unknown"),
+        "route_decision": metadata.get("route_decision", metadata.get("route", "candidate")),
+    }
     bucket_id = await bucket_mgr.create(
         content=content.strip(),
         tags=all_tags,
@@ -878,7 +886,42 @@ async def _write_wrapper_candidate(
     await bucket_mgr.update(bucket_id, tags=all_tags, **metadata)
     bucket = await bucket_mgr.get(bucket_id)
     bucket_name = bucket.get("metadata", {}).get("name", bucket_id) if bucket else bucket_id
-    return bucket_id, bucket_name
+    related_text = await _associated_memory_text(content, exclude_bucket_id=bucket_id)
+    return bucket_id, bucket_name, related_text
+
+
+async def _associated_memory_text(content: str, exclude_bucket_id: str = "", limit: int = 3) -> str:
+    """Return lightweight related-memory recall after a write."""
+    try:
+        matches = await bucket_mgr.search(content, limit=max(limit + 2, 5))
+    except Exception as e:
+        logger.warning(f"Associated memory search failed / 关联记忆检索失败: {e}")
+        return "associated_memories: unavailable"
+
+    rows = []
+    for bucket in matches:
+        if bucket.get("id") == exclude_bucket_id:
+            continue
+        meta = bucket.get("metadata", {})
+        try:
+            await bucket_mgr.touch(bucket["id"])
+        except Exception:
+            pass
+        snippet = strip_wikilinks(str(bucket.get("content", ""))).replace("\n", " ").strip()
+        snippet = snippet[:160] + ("…" if len(snippet) > 160 else "")
+        rows.append(
+            f"- id: {bucket.get('id', 'unknown')}\n"
+            f"  name: {meta.get('name', 'unknown')}\n"
+            f"  score: {bucket.get('score', 'unknown')}\n"
+            f"  domains: {','.join(meta.get('domain', [])) or 'unknown'}\n"
+            f"  preview: {snippet or '（空）'}"
+        )
+        if len(rows) >= limit:
+            break
+
+    if not rows:
+        return "associated_memories: none"
+    return "associated_memories:\n" + "\n".join(rows)
 
 
 def _mark_runtime_activity(source: str = "runtime") -> None:
@@ -2403,10 +2446,15 @@ async def hold(
 
 
 @mcp.tool()
-async def write_diary_draft(content: str) -> str:
+async def write_diary_draft(
+    content: str,
+    source_platform: str = "chatgpt",
+    source_surface: str = "daily_window",
+    source_window: str = "",
+) -> str:
     """写入自写日记草稿。固定进入 diary_draft → night_clean_queue，不直写 core/recent。"""
     try:
-        bucket_id, bucket_name = await _write_wrapper_candidate(
+        bucket_id, bucket_name, related_text = await _write_wrapper_candidate(
             content,
             domain=["日记草稿"],
             extra_tags=["self_written_diary", "diary_draft", "pending_review", "night_clean_queue"],
@@ -2416,6 +2464,11 @@ async def write_diary_draft(content: str) -> str:
                 "layer": "diary_draft",
                 "status": "pending_review",
                 "route": "night_clean_queue",
+                "source_platform": source_platform or "chatgpt",
+                "source_surface": source_surface or "daily_window",
+                "source_window": source_window or "unknown",
+                "source_mode": "diary",
+                "route_decision": "diary_draft",
                 "first_person_preferred": True,
                 "tail_context_allowed": True,
                 "tail_context_max_items": 3,
@@ -2425,17 +2478,23 @@ async def write_diary_draft(content: str) -> str:
         return (
             f"已写入日记草稿: {bucket_name}\n"
             f"ID: {bucket_id}\n"
-            "route=night_clean_queue | layer=diary_draft | status=pending_review"
+            "route=night_clean_queue | layer=diary_draft | status=pending_review\n"
+            f"{related_text}"
         )
     except Exception as e:
         return f"写入日记草稿失败: {e}"
 
 
 @mcp.tool()
-async def enqueue_night_clean_input(content: str) -> str:
+async def enqueue_night_clean_input(
+    content: str,
+    source_platform: str = "chatgpt",
+    source_surface: str = "daily_window",
+    source_window: str = "",
+) -> str:
     """把长输入或杂乱输入放进夜间整理队列，只进 draft/candidate。"""
     try:
-        bucket_id, bucket_name = await _write_wrapper_candidate(
+        bucket_id, bucket_name, related_text = await _write_wrapper_candidate(
             content,
             domain=["夜间整理"],
             extra_tags=["draft", "night_clean_queue", "pending"],
@@ -2445,6 +2504,11 @@ async def enqueue_night_clean_input(content: str) -> str:
                 "layer": "draft",
                 "status": "pending",
                 "route": "night_clean_queue",
+                "source_platform": source_platform or "chatgpt",
+                "source_surface": source_surface or "daily_window",
+                "source_window": source_window or "unknown",
+                "source_mode": "night_clean",
+                "route_decision": "night_clean_queue",
                 "priority_label": "low",
                 "first_person_preferred": True,
                 "tail_context_allowed": True,
@@ -2455,14 +2519,21 @@ async def enqueue_night_clean_input(content: str) -> str:
         return (
             f"已加入夜间整理队列: {bucket_name}\n"
             f"ID: {bucket_id}\n"
-            "route=night_clean_queue | layer=draft | priority=low | status=pending"
+            "route=night_clean_queue | layer=draft | priority=low | status=pending\n"
+            f"{related_text}"
         )
     except Exception as e:
         return f"加入夜间整理队列失败: {e}"
 
 
 @mcp.tool()
-async def write_project_workzone_update(content: str, type: str = "workzone") -> str:
+async def write_project_workzone_update(
+    content: str,
+    type: str = "workzone",
+    source_platform: str = "codex",
+    source_surface: str = "project_window",
+    source_window: str = "",
+) -> str:
     """写入工程 workzone 或 pending proposal，不自动落到 landed，也不写生活层。"""
     normalized = (type or "workzone").strip().lower()
     if normalized not in ("workzone", "pending"):
@@ -2475,13 +2546,18 @@ async def write_project_workzone_update(content: str, type: str = "workzone") ->
         "layer": "engineering_workzone" if normalized == "workzone" else "pending_proposal",
         "status": "active" if normalized == "workzone" else "not_landed",
         "route": "project_workzone" if normalized == "workzone" else "pending_proposal",
+        "source_platform": source_platform or "codex",
+        "source_surface": source_surface or "project_window",
+        "source_window": source_window or "unknown",
+        "source_mode": "engineering",
+        "route_decision": "engineering_workzone" if normalized == "workzone" else "pending_review",
         "tail_context_allowed": True,
         "tail_context_max_items": 3,
     }
     fallback_name = "工程进度" if normalized == "workzone" else "待定方案"
 
     try:
-        bucket_id, bucket_name = await _write_wrapper_candidate(
+        bucket_id, bucket_name, related_text = await _write_wrapper_candidate(
             content,
             domain=domain,
             extra_tags=extra_tags,
@@ -2492,7 +2568,8 @@ async def write_project_workzone_update(content: str, type: str = "workzone") ->
         return (
             f"已写入工程更新: {bucket_name}\n"
             f"ID: {bucket_id}\n"
-            f"layer={metadata['layer']} | status={metadata['status']} | route={metadata['route']}"
+            f"layer={metadata['layer']} | status={metadata['status']} | route={metadata['route']}\n"
+            f"{related_text}"
         )
     except Exception as e:
         return f"写入工程更新失败: {e}"
