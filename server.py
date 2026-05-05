@@ -125,6 +125,8 @@ RUNTIME_FEATURES = {
     "runtime_schema_expectations_mcp_tool": True,
     "runtime_diagnostics_http_endpoint": True,
     "runtime_diagnostics_mcp_tool": True,
+    "runtime_connector_check_http_endpoint": True,
+    "runtime_connector_check_mcp_tool": True,
     "associated_memory_after_writes": True,
     "associated_memory_shows_provenance": True,
     "hold_provenance_defaults": True,
@@ -144,6 +146,8 @@ RUNTIME_FEATURE_COMMITS = {
     "runtime_schema_expectations_mcp_tool": "self",
     "runtime_diagnostics_http_endpoint": "self",
     "runtime_diagnostics_mcp_tool": "self",
+    "runtime_connector_check_http_endpoint": "self",
+    "runtime_connector_check_mcp_tool": "self",
     "associated_memory_after_writes": "4d93255",
     "hold_provenance_defaults": "926b92d",
     "associated_memory_shows_provenance": "c4448c8",
@@ -170,6 +174,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "read_latest_dream_text",
     "reconsolidate",
     "reject_diary_review",
+    "runtime_connector_check",
     "runtime_diagnostics",
     "runtime_features",
     "runtime_schema_expectations",
@@ -270,6 +275,10 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "required": [],
         "optional": [],
     },
+    "runtime_connector_check": {
+        "required": [],
+        "optional": ["observed_tools", "observed_schemas_json"],
+    },
 }
 
 
@@ -307,6 +316,7 @@ def _runtime_features_payload() -> dict:
             "grow_optional_source_fields": "server_supported; connector_schema_may_lag",
             "write_after_read": "associated_memories returned by routed writes",
             "diagnostics_endpoint": "/api/runtime/diagnostics",
+            "connector_check_endpoint": "/api/runtime/connector-check",
             "tool_manifest_endpoint": "/api/runtime/tool-manifest",
             "schema_expectations_endpoint": "/api/runtime/schema-expectations",
             "provenance_fields": [
@@ -339,6 +349,7 @@ def _runtime_tool_manifest_payload() -> dict:
             "list_diary_reviews",
             "read_diary_review",
             "read_latest_dream_text",
+            "runtime_connector_check",
             "runtime_diagnostics",
             "runtime_features",
             "runtime_schema_expectations",
@@ -367,6 +378,145 @@ def _runtime_schema_expectations_payload() -> dict:
     }
 
 
+def _parse_observed_tools(observed_tools: str) -> list[str]:
+    raw = (observed_tools or "").strip()
+    if not raw:
+        return []
+
+    try:
+        data = json.loads(raw)
+    except Exception:
+        data = None
+
+    names = []
+    if isinstance(data, dict):
+        data = data.get("tools") or data.get("observed_tools") or data.get("names") or []
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, str):
+                names.append(item)
+            elif isinstance(item, dict):
+                name = item.get("name") or item.get("tool") or item.get("id")
+                if name:
+                    names.append(str(name))
+    if not names:
+        for chunk in raw.replace(",", "\n").replace(";", "\n").splitlines():
+            name = chunk.strip().strip("\"'`")
+            if name:
+                names.append(name)
+
+    return sorted({name for name in names if name})
+
+
+def _schema_arg_names(schema: object) -> set[str]:
+    if isinstance(schema, list):
+        return {str(item) for item in schema if isinstance(item, str)}
+    if not isinstance(schema, dict):
+        return set()
+
+    names = set()
+    for key in ("required", "optional", "args", "arguments", "parameters"):
+        value = schema.get(key)
+        if isinstance(value, list):
+            names.update(str(item) for item in value if isinstance(item, str))
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        names.update(str(key) for key in properties.keys())
+    input_schema = schema.get("inputSchema") or schema.get("input_schema")
+    if input_schema is not schema:
+        names.update(_schema_arg_names(input_schema))
+    return names
+
+
+def _parse_observed_schema_args(observed_schemas_json: str) -> dict[str, set[str]]:
+    raw = (observed_schemas_json or "").strip()
+    if not raw:
+        return {}
+
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return {}
+
+    result: dict[str, set[str]] = {}
+    if isinstance(data, dict):
+        tools = data.get("tools")
+        if isinstance(tools, list):
+            data = tools
+        else:
+            for name, schema in data.items():
+                if isinstance(name, str):
+                    result[name] = _schema_arg_names(schema)
+            return result
+
+    if isinstance(data, list):
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name") or item.get("tool") or item.get("id")
+            if name:
+                result[str(name)] = _schema_arg_names(item)
+    return result
+
+
+def _runtime_connector_check_payload(
+    observed_tools: str = "",
+    observed_schemas_json: str = "",
+) -> dict:
+    expected_tools = sorted(set(RUNTIME_EXPECTED_MCP_TOOLS))
+    observed = _parse_observed_tools(observed_tools)
+    observed_schema_args = _parse_observed_schema_args(observed_schemas_json)
+    if not observed and observed_schema_args:
+        observed = sorted(observed_schema_args.keys())
+    observed_set = set(observed)
+    expected_set = set(expected_tools)
+    missing = sorted(expected_set - observed_set) if observed else []
+    extra = sorted(observed_set - expected_set) if observed else []
+    critical = _runtime_tool_manifest_payload()["critical_life_window_tools"]
+    missing_critical = [tool for tool in critical if tool in missing]
+
+    schema_diffs = {}
+    for tool_name, args in observed_schema_args.items():
+        expected_schema = RUNTIME_EXPECTED_TOOL_SCHEMAS.get(tool_name)
+        if not expected_schema:
+            continue
+        expected_args = set(expected_schema.get("required", [])) | set(expected_schema.get("optional", []))
+        schema_diffs[tool_name] = {
+            "observed_args": sorted(args),
+            "expected_args": sorted(expected_args),
+            "missing_expected_args": sorted(expected_args - args),
+            "extra_args": sorted(args - expected_args),
+        }
+
+    if not observed:
+        verdict = "no_observed_tools_provided"
+    elif missing_critical:
+        verdict = "connector_schema_stale_or_incomplete"
+    elif missing:
+        verdict = "connector_missing_noncritical_tools"
+    elif any(diff["missing_expected_args"] for diff in schema_diffs.values()):
+        verdict = "connector_argument_schema_stale"
+    else:
+        verdict = "observed_tools_match_expected_manifest"
+
+    return {
+        "status": "ok",
+        "features_version": RUNTIME_FEATURES_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "verdict": verdict,
+        "expected_tool_count": len(expected_tools),
+        "observed_tool_count": len(observed),
+        "missing_tools": missing,
+        "missing_critical_life_window_tools": missing_critical,
+        "extra_tools": extra,
+        "schema_diffs": schema_diffs,
+        "usage": {
+            "observed_tools": "Pass comma/newline separated names, or JSON list/object with tools.",
+            "observed_schemas_json": "Optional JSON mapping tool names to args/properties, or a tools list with inputSchema.",
+        },
+    }
+
+
 def _runtime_diagnostics_payload() -> dict:
     manifest = _runtime_tool_manifest_payload()
     schemas = _runtime_schema_expectations_payload()
@@ -390,11 +540,13 @@ def _runtime_diagnostics_payload() -> dict:
             "tool_manifest": "/api/runtime/tool-manifest",
             "schema_expectations": "/api/runtime/schema-expectations",
             "diagnostics": "/api/runtime/diagnostics",
+            "connector_check": "/api/runtime/connector-check",
         },
         "decision_tree": [
             "If diagnostics git_sha is old, deployment has not reached the running container yet.",
             "If tool_manifest lists a tool but ChatGPT/Codex does not expose it, reconnect or wait for connector schema refresh.",
             "If schema_expectations lists an argument but the exposed tool lacks it, server supports it and connector schema is stale.",
+            "If connector_check reports missing critical tools or arguments, reconnect the connector and retest.",
             "If a tool is absent from tool_manifest, inspect server registration/deployment first.",
         ],
         "known_connector_lag": {
@@ -884,6 +1036,26 @@ async def api_runtime_diagnostics(request):
     from starlette.responses import JSONResponse
 
     return JSONResponse(_runtime_diagnostics_payload())
+
+
+@mcp.custom_route("/api/runtime/connector-check", methods=["GET", "POST"])
+async def api_runtime_connector_check(request):
+    from starlette.responses import JSONResponse
+
+    body = {}
+    if request.method == "POST":
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+    observed_tools = body.get("observed_tools") or request.query_params.get("tools", "")
+    observed_schemas = body.get("observed_schemas_json") or body.get("observed_schemas") or request.query_params.get("schemas", "")
+    if observed_schemas and not isinstance(observed_schemas, str):
+        observed_schemas = json.dumps(observed_schemas, ensure_ascii=False)
+    return JSONResponse(_runtime_connector_check_payload(
+        observed_tools=str(observed_tools or ""),
+        observed_schemas_json=str(observed_schemas or ""),
+    ))
 
 
 # =============================================================
@@ -3119,6 +3291,23 @@ async def runtime_diagnostics() -> str:
     """读取运行时部署、工具清单和 schema 刷新判断总报告。"""
     _mark_system_event("runtime_diagnostics")
     return json.dumps(_runtime_diagnostics_payload(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def runtime_connector_check(
+    observed_tools: str = "",
+    observed_schemas_json: str = "",
+) -> str:
+    """对照外部窗口实际暴露工具/参数，诊断 connector schema 是否滞后。"""
+    _mark_system_event("runtime_connector_check")
+    return json.dumps(
+        _runtime_connector_check_payload(
+            observed_tools=observed_tools,
+            observed_schemas_json=observed_schemas_json,
+        ),
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 # =============================================================
