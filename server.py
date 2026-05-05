@@ -3300,17 +3300,11 @@ async def accept_diary_review(review_id: str) -> str:
         meta = _simple_frontmatter(text)
         risk_flags = meta.get("risk_flags", "")
         review_level = meta.get("review_level", "")
-        if (
-            "identity_pov_conflict" in risk_flags
-            or "duplicate_candidate" in risk_flags
-            or review_level in ("blocked", "duplicate")
-        ):
+        if "identity_pov_conflict" in risk_flags or review_level == "blocked":
             return (
                 f"候选存在风险，已阻止收入: {safe_id}\n"
                 f"risk_flags: {risk_flags or 'unknown'}\n"
                 f"review_level: {review_level or 'unknown'}\n"
-                f"duplicate_of: {meta.get('duplicate_of', 'unknown')}\n"
-                f"similarity_score: {meta.get('similarity_score', 'unknown')}\n"
                 "请先 reject_diary_review，或重新生成修正后的候选。"
             )
         body = text.split("---", 2)[2].strip() if text.startswith("---") and len(text.split("---", 2)) == 3 else text
