@@ -116,6 +116,40 @@ _runtime_ready = False
 _runtime_ready_last_ok = 0.0
 _runtime_ready_last_error = ""
 
+RUNTIME_FEATURES = {
+    "associated_memory_after_writes": True,
+    "associated_memory_shows_provenance": True,
+    "hold_provenance_defaults": True,
+    "grow_provenance_defaults": True,
+    "bucket_metadata_provenance_persistence": True,
+    "diary_review_duplicate_metadata_persistence": True,
+    "cadence_draft_runtime_persistence": True,
+    "diary_review_duplicate_detection": True,
+}
+RUNTIME_FEATURES_VERSION = "2026-05-05.provenance-v1"
+RUNTIME_FEATURE_COMMITS = {
+    "associated_memory_after_writes": "4d93255",
+    "hold_provenance_defaults": "926b92d",
+    "associated_memory_shows_provenance": "c4448c8",
+    "grow_provenance_defaults": "7c32ed6",
+    "bucket_metadata_provenance_persistence": "c662017",
+}
+
+
+def _runtime_git_sha() -> str:
+    for name in (
+        "ZEABUR_GIT_COMMIT_SHA",
+        "ZEABUR_COMMIT_SHA",
+        "GIT_COMMIT_SHA",
+        "GITHUB_SHA",
+        "SOURCE_VERSION",
+        "COMMIT_SHA",
+    ):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
 # --- Dual-cadence draft-only execution / 双节奏草稿执行 ---
 CADENCE_ENABLED = os.environ.get("OMBRE_DUAL_CADENCE_ENABLED", "1").lower() not in ("0", "false", "no")
 RUNTIME_STORAGE_DIR = _runtime_storage_base()
@@ -569,6 +603,38 @@ async def ready_check(request):
         "detail": detail or _runtime_ready_last_error or "runtime warm-up pending",
         "runtime_uptime_seconds": round(time.time() - _runtime_boot_ts, 2),
     }, status_code=503)
+
+
+@mcp.custom_route("/api/runtime/features", methods=["GET"])
+async def api_runtime_features(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse({
+        "status": "ok",
+        "features_version": RUNTIME_FEATURES_VERSION,
+        "features": RUNTIME_FEATURES,
+        "feature_commits": RUNTIME_FEATURE_COMMITS,
+        "git_sha": _runtime_git_sha(),
+        "runtime_uptime_seconds": round(time.time() - _runtime_boot_ts, 2),
+        "startup_bridge_ready": _runtime_ready,
+        "storage": {
+            "runtime_dir": RUNTIME_STORAGE_DIR,
+            "cadence_draft_dir": CADENCE_DRAFT_DIR,
+            "cadence_receipt_dir": CADENCE_RECEIPT_DIR,
+            "cadence_draft_only": True,
+        },
+        "schema_notes": {
+            "grow_optional_source_fields": "server_supported; connector_schema_may_lag",
+            "write_after_read": "associated_memories returned by routed writes",
+            "provenance_fields": [
+                "source_platform",
+                "source_surface",
+                "source_window",
+                "source_mode",
+                "route_decision",
+            ],
+        },
+    })
 
 
 # =============================================================
