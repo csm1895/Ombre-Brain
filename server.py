@@ -167,6 +167,10 @@ CADENCE_NIGHT_MIN_IDLE_MINUTES = max(30, int(os.environ.get("OMBRE_NIGHT_MIN_IDL
 CADENCE_CHECK_INTERVAL_SECONDS = max(120, int(os.environ.get("OMBRE_CADENCE_CHECK_INTERVAL_SECONDS", "300")))
 CADENCE_DEEPSEEK_ENABLED = os.environ.get("OMBRE_CADENCE_DEEPSEEK_ENABLED", "0").lower() in ("1", "true", "yes")
 CADENCE_DEEPSEEK_MAX_INPUT_CHARS = max(1500, int(os.environ.get("OMBRE_CADENCE_DEEPSEEK_MAX_INPUT_CHARS", "6000")))
+DIARY_REVIEW_DEDUP_OVERLAP_THRESHOLD = max(
+    0.0,
+    min(1.0, float(os.environ.get("OMBRE_DIARY_REVIEW_DEDUP_OVERLAP_THRESHOLD", "0.7"))),
+)
 _cadence_last_activity_ts = time.time()
 _cadence_last_idle_run_ts = 0.0
 _cadence_last_night_run_date = ""
@@ -1053,6 +1057,20 @@ def _pending_review_path(review_id: str) -> str:
     return os.path.join(_cadence_review_dirs()["pending"], _safe_review_id(review_id))
 
 
+def _split_csv_field(value: str) -> list[str]:
+    return [item.strip() for item in str(value or "").split(",") if item.strip()]
+
+
+def _join_csv_field(values: list[str] | None) -> str:
+    if not values:
+        return ""
+    return ",".join(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+
+
+def _cadence_bucket_ids(buckets: list[dict]) -> list[str]:
+    return [str(bucket.get("id", "")).strip() for bucket in buckets if str(bucket.get("id", "")).strip()]
+
+
 def _simple_frontmatter(text: str) -> dict[str, str]:
     if not text.startswith("---"):
         return {}
@@ -1172,7 +1190,91 @@ def _diary_review_metadata(candidate_text: str, duplicate_meta: dict[str, str] |
     }
 
 
-def _write_diary_review_candidate(candidate_path: str, timestamp: str, mode: str, now_cst: datetime) -> str:
+def _diary_review_created_date(meta: dict[str, str], path: str) -> str:
+    created = (meta.get("created_at") or meta.get("generated_at") or "")[:10]
+    if created:
+        return created
+    basename = os.path.basename(path)
+    if len(basename) >= 8 and basename[:8].isdigit():
+        return f"{basename[:4]}-{basename[4:6]}-{basename[6:8]}"
+    return ""
+
+
+def _diary_review_mode(path: str, meta: dict[str, str]) -> str:
+    basename = os.path.basename(path)
+    if "_idle_" in basename:
+        return "idle"
+    if "_night_" in basename:
+        return "night"
+    return meta.get("pass_type") or meta.get("mode") or ""
+
+
+def _diary_review_coverage_ids(meta: dict[str, str]) -> list[str]:
+    return _split_csv_field(meta.get("coverage_bucket_ids") or meta.get("source_bucket_ids") or "")
+
+
+def _diary_review_dedup_dates(mode: str, now_cst: datetime) -> set[str]:
+    dates = {now_cst.strftime("%Y-%m-%d")}
+    if mode == "night":
+        dates.add((now_cst - timedelta(days=1)).strftime("%Y-%m-%d"))
+    return dates
+
+
+def _iter_diary_review_paths(states: tuple[str, ...] = ("pending", "accepted")) -> list[str]:
+    paths: list[str] = []
+    dirs = _cadence_review_dirs()
+    for state in states:
+        review_dir = dirs.get(state, "")
+        if not review_dir or not os.path.isdir(review_dir):
+            continue
+        for name in os.listdir(review_dir):
+            if name.endswith(".md"):
+                paths.append(os.path.join(review_dir, name))
+    return paths
+
+
+def _find_duplicate_diary_review(mode: str, now_cst: datetime, coverage_bucket_ids: list[str]) -> dict:
+    current_ids = set(_split_csv_field(_join_csv_field(coverage_bucket_ids)))
+    if not current_ids:
+        return {"duplicate": False}
+    target_dates = _diary_review_dedup_dates(mode, now_cst)
+    opposite_mode = "night" if mode == "idle" else "idle"
+    best = {"duplicate": False, "overlap_ratio": 0.0}
+
+    for path in _iter_diary_review_paths():
+        try:
+            text = _tail_text_file(path, 2000)
+        except Exception:
+            continue
+        meta = _simple_frontmatter(text)
+        if meta.get("brain_owner") and meta.get("brain_owner") != DIARY_REVIEW_BRAIN_OWNER:
+            continue
+        if _diary_review_created_date(meta, path) not in target_dates:
+            continue
+        if _diary_review_mode(path, meta) != opposite_mode:
+            continue
+        existing_ids = set(_diary_review_coverage_ids(meta))
+        if not existing_ids:
+            continue
+        overlap_ratio = len(current_ids & existing_ids) / max(1, min(len(current_ids), len(existing_ids)))
+        if overlap_ratio > float(best.get("overlap_ratio", 0.0)):
+            best = {
+                "duplicate": overlap_ratio >= DIARY_REVIEW_DEDUP_OVERLAP_THRESHOLD,
+                "existing_review_id": os.path.basename(path),
+                "existing_review_path": path,
+                "overlap_ratio": round(overlap_ratio, 3),
+                "skip_reason": "duplicate_coverage",
+            }
+    return best if best.get("duplicate") else {"duplicate": False, "overlap_ratio": best.get("overlap_ratio", 0.0)}
+
+
+def _write_diary_review_candidate(
+    candidate_path: str,
+    timestamp: str,
+    mode: str,
+    now_cst: datetime,
+    coverage_bucket_ids: list[str] | None = None,
+) -> str:
     dirs = _cadence_review_dirs()
     os.makedirs(dirs["pending"], exist_ok=True)
     review_id = f"{timestamp}_{mode}_diary_review.md"
@@ -1191,6 +1293,7 @@ def _write_diary_review_candidate(candidate_path: str, timestamp: str, mode: str
         f"brain_owner: {review_meta['brain_owner']}",
         f"mentioned_entities: {review_meta['mentioned_entities']}",
         f"laid_entities: {review_meta['laid_entities']}",
+        f"coverage_bucket_ids: {_join_csv_field(coverage_bucket_ids or [])}",
         f"risk_flags: {review_meta['risk_flags']}",
         f"review_level: {review_meta['review_level']}",
         f"duplicate_candidate: {review_meta['duplicate_candidate']}",
@@ -1217,6 +1320,7 @@ async def _generate_cadence_dream(
     life_recent: list[dict],
     draft_path: str,
     force_deepseek: bool = False,
+    coverage_bucket_ids: list[str] | None = None,
 ) -> dict:
     if mode != "night":
         return {"called": False, "reason": "not_night"}
@@ -1275,6 +1379,7 @@ async def _generate_cadence_dream(
         "write_scope: separate_dream_storage",
         "main_brain_write: false",
         f"generated_at: {now_cst.isoformat()}",
+        f"coverage_bucket_ids: {_join_csv_field(coverage_bucket_ids)}",
         "---",
         "",
         dream_text,
@@ -1442,6 +1547,7 @@ async def _run_cadence_deepseek_candidate(
     quiet_minutes: float,
     draft_path: str,
     force_deepseek: bool = False,
+    coverage_bucket_ids: list[str] | None = None,
 ) -> dict:
     if not (CADENCE_DEEPSEEK_ENABLED or force_deepseek):
         return {"enabled": False, "called": False, "reason": "env_flag_disabled"}
@@ -1456,6 +1562,18 @@ async def _run_cadence_deepseek_candidate(
         draft_text = handle.read().strip()
     if not draft_text:
         return {"enabled": True, "called": False, "reason": "draft_empty"}
+
+    duplicate = _find_duplicate_diary_review(mode, now_cst, coverage_bucket_ids or [])
+    if duplicate.get("duplicate"):
+        return {
+            "enabled": True,
+            "called": False,
+            "skipped": True,
+            "reason": "duplicate_coverage",
+            "existing_review_id": duplicate.get("existing_review_id", ""),
+            "existing_review_path": duplicate.get("existing_review_path", ""),
+            "overlap_ratio": duplicate.get("overlap_ratio", 0.0),
+        }
 
     candidate_path = os.path.join(CADENCE_DRAFT_DIR, f"{timestamp}_{mode}_deepseek_candidate.md")
     bounded_input = draft_text[:CADENCE_DEEPSEEK_MAX_INPUT_CHARS]
@@ -1517,6 +1635,7 @@ async def _run_cadence_deepseek_candidate(
         f"narrator: {DIARY_REVIEW_NARRATOR}",
         f"brain_owner: {DIARY_REVIEW_BRAIN_OWNER}",
         f"laid_entities: {DIARY_REVIEW_LAID_ENTITIES}",
+        f"coverage_bucket_ids: {_join_csv_field(coverage_bucket_ids or [])}",
         "pov_rule: other_ai_as_mentioned_entities_only",
         f"generated_at: {now_cst.isoformat()}",
         "---",
@@ -1526,7 +1645,7 @@ async def _run_cadence_deepseek_candidate(
     ]
     with open(candidate_path, "w", encoding="utf-8") as handle:
         handle.write("\n".join(candidate_lines))
-    review_path = _write_diary_review_candidate(candidate_path, timestamp, mode, now_cst)
+    review_path = _write_diary_review_candidate(candidate_path, timestamp, mode, now_cst, coverage_bucket_ids or [])
     return {
         "enabled": True,
         "called": True,
@@ -1565,6 +1684,7 @@ async def _run_cadence_pass(mode: str, reason: str = "manual", force_deepseek: b
     last_conclusion = _cadence_bucket_line(landed[0]) if landed else "暂无已落地结论。"
     not_landed = [_cadence_bucket_line(b) for b in pending[:2]] or ["暂无明确未落地项。"]
     quiet_minutes = round(_cadence_recent_idle_seconds() / 60, 1)
+    coverage_bucket_ids = _cadence_bucket_ids(life_recent)
     timestamp = now_cst.strftime("%Y%m%d_%H%M%S")
     draft_path = os.path.join(CADENCE_DRAFT_DIR, f"{timestamp}_{mode}_draft.md")
 
@@ -1615,6 +1735,7 @@ async def _run_cadence_pass(mode: str, reason: str = "manual", force_deepseek: b
             quiet_minutes=quiet_minutes,
             draft_path=draft_path,
             force_deepseek=force_deepseek,
+            coverage_bucket_ids=coverage_bucket_ids,
         )
     except Exception as e:
         deepseek_result = {"enabled": (CADENCE_DEEPSEEK_ENABLED or force_deepseek), "called": False, "reason": f"error:{e}"}
@@ -1635,6 +1756,7 @@ async def _run_cadence_pass(mode: str, reason: str = "manual", force_deepseek: b
             life_recent=life_recent,
             draft_path=draft_path,
             force_deepseek=force_deepseek,
+            coverage_bucket_ids=coverage_bucket_ids,
         )
     except Exception as e:
         dream_result = {"called": False, "reason": f"error:{e}"}
@@ -1648,6 +1770,15 @@ async def _run_cadence_pass(mode: str, reason: str = "manual", force_deepseek: b
         f"  operation draft_write path={draft_path}",
         f"  operation deepseek_candidate called={deepseek_result.get('called', False)} reason={deepseek_result.get('reason', 'ok')} path={deepseek_result.get('path', '-')}",
         f"  operation diary_review pending_path={deepseek_result.get('review_path', '-')}",
+        *(
+            [
+                "  operation diary_review_skip skip_reason=duplicate_coverage "
+                f"existing_review_id={deepseek_result.get('existing_review_id', '-')} "
+                f"overlap_ratio={deepseek_result.get('overlap_ratio', 0.0)}"
+            ]
+            if deepseek_result.get("reason") == "duplicate_coverage"
+            else []
+        ),
         f"  operation dream called={dream_result.get('called', False)} reason={dream_result.get('reason', 'ok')} path={dream_result.get('path', '-')}",
         "  operation merge=0 archive=0 decay=not_run main_brain_write=false",
         f"  tokens candidate_total={deepseek_tokens.get('total_tokens', 0)} dream_total={dream_tokens.get('total_tokens', 0)}",
