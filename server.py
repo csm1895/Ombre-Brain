@@ -123,6 +123,8 @@ RUNTIME_FEATURES = {
     "runtime_tool_manifest_mcp_tool": True,
     "runtime_schema_expectations_http_endpoint": True,
     "runtime_schema_expectations_mcp_tool": True,
+    "runtime_diagnostics_http_endpoint": True,
+    "runtime_diagnostics_mcp_tool": True,
     "associated_memory_after_writes": True,
     "associated_memory_shows_provenance": True,
     "hold_provenance_defaults": True,
@@ -140,6 +142,8 @@ RUNTIME_FEATURE_COMMITS = {
     "runtime_tool_manifest_mcp_tool": "self",
     "runtime_schema_expectations_http_endpoint": "self",
     "runtime_schema_expectations_mcp_tool": "self",
+    "runtime_diagnostics_http_endpoint": "self",
+    "runtime_diagnostics_mcp_tool": "self",
     "associated_memory_after_writes": "4d93255",
     "hold_provenance_defaults": "926b92d",
     "associated_memory_shows_provenance": "c4448c8",
@@ -166,6 +170,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "read_latest_dream_text",
     "reconsolidate",
     "reject_diary_review",
+    "runtime_diagnostics",
     "runtime_features",
     "runtime_schema_expectations",
     "runtime_tool_manifest",
@@ -261,6 +266,10 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "required": [],
         "optional": [],
     },
+    "runtime_diagnostics": {
+        "required": [],
+        "optional": [],
+    },
 }
 
 
@@ -297,6 +306,7 @@ def _runtime_features_payload() -> dict:
         "schema_notes": {
             "grow_optional_source_fields": "server_supported; connector_schema_may_lag",
             "write_after_read": "associated_memories returned by routed writes",
+            "diagnostics_endpoint": "/api/runtime/diagnostics",
             "tool_manifest_endpoint": "/api/runtime/tool-manifest",
             "schema_expectations_endpoint": "/api/runtime/schema-expectations",
             "provenance_fields": [
@@ -329,6 +339,7 @@ def _runtime_tool_manifest_payload() -> dict:
             "list_diary_reviews",
             "read_diary_review",
             "read_latest_dream_text",
+            "runtime_diagnostics",
             "runtime_features",
             "runtime_schema_expectations",
             "runtime_tool_manifest",
@@ -353,6 +364,43 @@ def _runtime_schema_expectations_payload() -> dict:
             "are missing fields listed here, the server supports the fields and the "
             "connector schema likely needs reconnect/refresh."
         ),
+    }
+
+
+def _runtime_diagnostics_payload() -> dict:
+    manifest = _runtime_tool_manifest_payload()
+    schemas = _runtime_schema_expectations_payload()
+    features = _runtime_features_payload()
+    return {
+        "status": "ok",
+        "features_version": RUNTIME_FEATURES_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "runtime_uptime_seconds": round(time.time() - _runtime_boot_ts, 2),
+        "startup_bridge_ready": _runtime_ready,
+        "summary": {
+            "expected_mcp_tool_count": manifest["expected_mcp_tool_count"],
+            "schema_expectation_count": schemas["schema_expectation_count"],
+            "critical_life_window_tool_count": len(manifest["critical_life_window_tools"]),
+            "runtime_dir": features["storage"]["runtime_dir"],
+            "cadence_draft_only": features["storage"]["cadence_draft_only"],
+        },
+        "critical_life_window_tools": manifest["critical_life_window_tools"],
+        "endpoints": {
+            "features": "/api/runtime/features",
+            "tool_manifest": "/api/runtime/tool-manifest",
+            "schema_expectations": "/api/runtime/schema-expectations",
+            "diagnostics": "/api/runtime/diagnostics",
+        },
+        "decision_tree": [
+            "If diagnostics git_sha is old, deployment has not reached the running container yet.",
+            "If tool_manifest lists a tool but ChatGPT/Codex does not expose it, reconnect or wait for connector schema refresh.",
+            "If schema_expectations lists an argument but the exposed tool lacks it, server supports it and connector schema is stale.",
+            "If a tool is absent from tool_manifest, inspect server registration/deployment first.",
+        ],
+        "known_connector_lag": {
+            "grow": "Connector may still expose only content while server supports source_platform/source_surface/source_window.",
+            "new_runtime_tools": "runtime_features/runtime_tool_manifest/runtime_schema_expectations/runtime_diagnostics may require reconnect before appearing.",
+        },
     }
 
 # --- Dual-cadence draft-only execution / 双节奏草稿执行 ---
@@ -829,6 +877,13 @@ async def api_runtime_schema_expectations(request):
     from starlette.responses import JSONResponse
 
     return JSONResponse(_runtime_schema_expectations_payload())
+
+
+@mcp.custom_route("/api/runtime/diagnostics", methods=["GET"])
+async def api_runtime_diagnostics(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(_runtime_diagnostics_payload())
 
 
 # =============================================================
@@ -3057,6 +3112,13 @@ async def runtime_schema_expectations() -> str:
     """读取关键 MCP 工具的预期参数 schema，用于排查参数缓存。"""
     _mark_system_event("runtime_schema_expectations")
     return json.dumps(_runtime_schema_expectations_payload(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def runtime_diagnostics() -> str:
+    """读取运行时部署、工具清单和 schema 刷新判断总报告。"""
+    _mark_system_event("runtime_diagnostics")
+    return json.dumps(_runtime_diagnostics_payload(), ensure_ascii=False, indent=2)
 
 
 # =============================================================
