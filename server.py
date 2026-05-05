@@ -117,6 +117,8 @@ _runtime_ready_last_ok = 0.0
 _runtime_ready_last_error = ""
 
 RUNTIME_FEATURES = {
+    "runtime_features_http_endpoint": True,
+    "runtime_features_mcp_tool": True,
     "associated_memory_after_writes": True,
     "associated_memory_shows_provenance": True,
     "hold_provenance_defaults": True,
@@ -128,6 +130,8 @@ RUNTIME_FEATURES = {
 }
 RUNTIME_FEATURES_VERSION = "2026-05-05.provenance-v1"
 RUNTIME_FEATURE_COMMITS = {
+    "runtime_features_http_endpoint": "a4528ec",
+    "runtime_features_mcp_tool": "self",
     "associated_memory_after_writes": "4d93255",
     "hold_provenance_defaults": "926b92d",
     "associated_memory_shows_provenance": "c4448c8",
@@ -149,6 +153,35 @@ def _runtime_git_sha() -> str:
         if value:
             return value
     return ""
+
+
+def _runtime_features_payload() -> dict:
+    return {
+        "status": "ok",
+        "features_version": RUNTIME_FEATURES_VERSION,
+        "features": RUNTIME_FEATURES,
+        "feature_commits": RUNTIME_FEATURE_COMMITS,
+        "git_sha": _runtime_git_sha(),
+        "runtime_uptime_seconds": round(time.time() - _runtime_boot_ts, 2),
+        "startup_bridge_ready": _runtime_ready,
+        "storage": {
+            "runtime_dir": RUNTIME_STORAGE_DIR,
+            "cadence_draft_dir": CADENCE_DRAFT_DIR,
+            "cadence_receipt_dir": CADENCE_RECEIPT_DIR,
+            "cadence_draft_only": True,
+        },
+        "schema_notes": {
+            "grow_optional_source_fields": "server_supported; connector_schema_may_lag",
+            "write_after_read": "associated_memories returned by routed writes",
+            "provenance_fields": [
+                "source_platform",
+                "source_surface",
+                "source_window",
+                "source_mode",
+                "route_decision",
+            ],
+        },
+    }
 
 # --- Dual-cadence draft-only execution / 双节奏草稿执行 ---
 CADENCE_ENABLED = os.environ.get("OMBRE_DUAL_CADENCE_ENABLED", "1").lower() not in ("0", "false", "no")
@@ -609,32 +642,7 @@ async def ready_check(request):
 async def api_runtime_features(request):
     from starlette.responses import JSONResponse
 
-    return JSONResponse({
-        "status": "ok",
-        "features_version": RUNTIME_FEATURES_VERSION,
-        "features": RUNTIME_FEATURES,
-        "feature_commits": RUNTIME_FEATURE_COMMITS,
-        "git_sha": _runtime_git_sha(),
-        "runtime_uptime_seconds": round(time.time() - _runtime_boot_ts, 2),
-        "startup_bridge_ready": _runtime_ready,
-        "storage": {
-            "runtime_dir": RUNTIME_STORAGE_DIR,
-            "cadence_draft_dir": CADENCE_DRAFT_DIR,
-            "cadence_receipt_dir": CADENCE_RECEIPT_DIR,
-            "cadence_draft_only": True,
-        },
-        "schema_notes": {
-            "grow_optional_source_fields": "server_supported; connector_schema_may_lag",
-            "write_after_read": "associated_memories returned by routed writes",
-            "provenance_fields": [
-                "source_platform",
-                "source_surface",
-                "source_window",
-                "source_mode",
-                "route_decision",
-            ],
-        },
-    })
+    return JSONResponse(_runtime_features_payload())
 
 
 # =============================================================
@@ -2842,6 +2850,13 @@ async def trace(
         else:
             changed += " → 已重新激活，将参与浮现排序"
     return f"已修改记忆桶 {bucket_id}: {changed}"
+
+
+@mcp.tool()
+async def runtime_features() -> str:
+    """读取线上运行时功能开关、版本和部署线索。"""
+    _mark_system_event("runtime_features")
+    return json.dumps(_runtime_features_payload(), ensure_ascii=False, indent=2)
 
 
 # =============================================================
