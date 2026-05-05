@@ -120,6 +120,7 @@ RUNTIME_FEATURES = {
     "runtime_features_http_endpoint": True,
     "runtime_features_mcp_tool": True,
     "runtime_tool_manifest_http_endpoint": True,
+    "runtime_tool_manifest_mcp_tool": True,
     "associated_memory_after_writes": True,
     "associated_memory_shows_provenance": True,
     "hold_provenance_defaults": True,
@@ -134,6 +135,7 @@ RUNTIME_FEATURE_COMMITS = {
     "runtime_features_http_endpoint": "a4528ec",
     "runtime_features_mcp_tool": "self",
     "runtime_tool_manifest_http_endpoint": "self",
+    "runtime_tool_manifest_mcp_tool": "self",
     "associated_memory_after_writes": "4d93255",
     "hold_provenance_defaults": "926b92d",
     "associated_memory_shows_provenance": "c4448c8",
@@ -161,6 +163,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "reconsolidate",
     "reject_diary_review",
     "runtime_features",
+    "runtime_tool_manifest",
     "save_tail_context",
     "search",
     "see_image",
@@ -240,6 +243,7 @@ def _runtime_tool_manifest_payload() -> dict:
             "read_diary_review",
             "read_latest_dream_text",
             "runtime_features",
+            "runtime_tool_manifest",
             "check_logs",
         ],
         "schema_refresh_hint": (
@@ -2929,6 +2933,13 @@ async def runtime_features() -> str:
     """读取线上运行时功能开关、版本和部署线索。"""
     _mark_system_event("runtime_features")
     return json.dumps(_runtime_features_payload(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def runtime_tool_manifest() -> str:
+    """读取 server 期望暴露的 MCP 工具清单，用于排查 schema 缓存。"""
+    _mark_system_event("runtime_tool_manifest")
+    return json.dumps(_runtime_tool_manifest_payload(), ensure_ascii=False, indent=2)
 
 
 # =============================================================
