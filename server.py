@@ -295,6 +295,8 @@ RUNTIME_UPSTREAM_WATCH_ITEMS = [
         "source": "user_reported",
         "reported_at": "2026-05-05",
         "upstream": "Tsurumi/OmbreBrain-based phase 2 upgrade",
+        "github_repo": "https://github.com/P0luz/Ombre-Brain",
+        "backup_repo": "https://git.p0lar1s.uk/P0lar1s/Ombre_Brain",
         "expected_window": "around the week after 2026-05-05",
         "status": "watch_only_unverified",
         "intake_policy": "read_only_compare_first",
