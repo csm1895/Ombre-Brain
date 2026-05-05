@@ -127,6 +127,8 @@ RUNTIME_FEATURES = {
     "runtime_diagnostics_mcp_tool": True,
     "runtime_connector_check_http_endpoint": True,
     "runtime_connector_check_mcp_tool": True,
+    "runtime_upstream_watch_http_endpoint": True,
+    "runtime_upstream_watch_mcp_tool": True,
     "associated_memory_after_writes": True,
     "associated_memory_shows_provenance": True,
     "hold_provenance_defaults": True,
@@ -148,6 +150,8 @@ RUNTIME_FEATURE_COMMITS = {
     "runtime_diagnostics_mcp_tool": "self",
     "runtime_connector_check_http_endpoint": "self",
     "runtime_connector_check_mcp_tool": "self",
+    "runtime_upstream_watch_http_endpoint": "self",
+    "runtime_upstream_watch_mcp_tool": "self",
     "associated_memory_after_writes": "4d93255",
     "hold_provenance_defaults": "926b92d",
     "associated_memory_shows_provenance": "c4448c8",
@@ -179,6 +183,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "runtime_features",
     "runtime_schema_expectations",
     "runtime_tool_manifest",
+    "runtime_upstream_watch",
     "save_tail_context",
     "search",
     "see_image",
@@ -279,7 +284,34 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "required": [],
         "optional": ["observed_tools", "observed_schemas_json"],
     },
+    "runtime_upstream_watch": {
+        "required": [],
+        "optional": [],
+    },
 }
+RUNTIME_UPSTREAM_WATCH_ITEMS = [
+    {
+        "id": "ombrebrain_phase2_tsurumi_watch",
+        "source": "user_reported",
+        "reported_at": "2026-05-05",
+        "upstream": "Tsurumi/OmbreBrain-based phase 2 upgrade",
+        "expected_window": "around the week after 2026-05-05",
+        "status": "watch_only_unverified",
+        "intake_policy": "read_only_compare_first",
+        "do_not": [
+            "do not auto-merge upstream changes",
+            "do not overwrite local provenance/runtime diagnostics work",
+            "do not treat upstream plans as deployed facts before release evidence",
+        ],
+        "compare_focus": [
+            "memory write/read coupling",
+            "multi-platform source provenance",
+            "connector schema refresh behavior",
+            "runtime persistence paths",
+            "frontend/gateway/local deployment ideas",
+        ],
+    }
+]
 
 
 def _runtime_git_sha() -> str:
@@ -317,6 +349,7 @@ def _runtime_features_payload() -> dict:
             "write_after_read": "associated_memories returned by routed writes",
             "diagnostics_endpoint": "/api/runtime/diagnostics",
             "connector_check_endpoint": "/api/runtime/connector-check",
+            "upstream_watch_endpoint": "/api/runtime/upstream-watch",
             "tool_manifest_endpoint": "/api/runtime/tool-manifest",
             "schema_expectations_endpoint": "/api/runtime/schema-expectations",
             "provenance_fields": [
@@ -354,6 +387,7 @@ def _runtime_tool_manifest_payload() -> dict:
             "runtime_features",
             "runtime_schema_expectations",
             "runtime_tool_manifest",
+            "runtime_upstream_watch",
             "check_logs",
         ],
         "schema_refresh_hint": (
@@ -375,6 +409,28 @@ def _runtime_schema_expectations_payload() -> dict:
             "are missing fields listed here, the server supports the fields and the "
             "connector schema likely needs reconnect/refresh."
         ),
+    }
+
+
+def _runtime_upstream_watch_payload() -> dict:
+    return {
+        "status": "ok",
+        "features_version": RUNTIME_FEATURES_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "watch_items": RUNTIME_UPSTREAM_WATCH_ITEMS,
+        "watch_item_count": len(RUNTIME_UPSTREAM_WATCH_ITEMS),
+        "intake_steps": [
+            "Wait for concrete upstream release notes, commit, docs, or demo evidence.",
+            "Read upstream material first and summarize deltas into engineering workzone.",
+            "Compare against runtime diagnostics, tool manifest, schema expectations, and connector check.",
+            "Promote only small compatible patches; keep local provenance and multi-window diagnostics intact.",
+        ],
+        "current_local_baseline": {
+            "diagnostics": "/api/runtime/diagnostics",
+            "tool_manifest": "/api/runtime/tool-manifest",
+            "schema_expectations": "/api/runtime/schema-expectations",
+            "connector_check": "/api/runtime/connector-check",
+        },
     }
 
 
@@ -541,6 +597,7 @@ def _runtime_diagnostics_payload() -> dict:
             "schema_expectations": "/api/runtime/schema-expectations",
             "diagnostics": "/api/runtime/diagnostics",
             "connector_check": "/api/runtime/connector-check",
+            "upstream_watch": "/api/runtime/upstream-watch",
         },
         "decision_tree": [
             "If diagnostics git_sha is old, deployment has not reached the running container yet.",
@@ -552,6 +609,11 @@ def _runtime_diagnostics_payload() -> dict:
         "known_connector_lag": {
             "grow": "Connector may still expose only content while server supports source_platform/source_surface/source_window.",
             "new_runtime_tools": "runtime_features/runtime_tool_manifest/runtime_schema_expectations/runtime_diagnostics may require reconnect before appearing.",
+        },
+        "upstream_watch": {
+            "watch_item_count": len(RUNTIME_UPSTREAM_WATCH_ITEMS),
+            "endpoint": "/api/runtime/upstream-watch",
+            "policy": "watch-only until concrete upstream evidence is available",
         },
     }
 
@@ -1056,6 +1118,13 @@ async def api_runtime_connector_check(request):
         observed_tools=str(observed_tools or ""),
         observed_schemas_json=str(observed_schemas or ""),
     ))
+
+
+@mcp.custom_route("/api/runtime/upstream-watch", methods=["GET"])
+async def api_runtime_upstream_watch(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(_runtime_upstream_watch_payload())
 
 
 # =============================================================
@@ -3308,6 +3377,13 @@ async def runtime_connector_check(
         ensure_ascii=False,
         indent=2,
     )
+
+
+@mcp.tool()
+async def runtime_upstream_watch() -> str:
+    """读取上游升级观察位和只读 intake 路线。"""
+    _mark_system_event("runtime_upstream_watch")
+    return json.dumps(_runtime_upstream_watch_payload(), ensure_ascii=False, indent=2)
 
 
 # =============================================================
