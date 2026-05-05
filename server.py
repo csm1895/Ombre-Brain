@@ -895,7 +895,12 @@ async def _write_wrapper_candidate(
     return bucket_id, bucket_name, related_text
 
 
-async def _associated_memory_text(content: str, exclude_bucket_id: str = "", limit: int = 3) -> str:
+async def _associated_memory_text(
+    content: str,
+    exclude_bucket_id: str = "",
+    exclude_bucket_ids: set[str] | None = None,
+    limit: int = 3,
+) -> str:
     """Return lightweight related-memory recall after a write."""
     try:
         matches = await bucket_mgr.search(content, limit=max(limit + 2, 5))
@@ -904,8 +909,11 @@ async def _associated_memory_text(content: str, exclude_bucket_id: str = "", lim
         return "associated_memories: unavailable"
 
     rows = []
+    excluded = set(exclude_bucket_ids or set())
+    if exclude_bucket_id:
+        excluded.add(exclude_bucket_id)
     for bucket in matches:
-        if bucket.get("id") == exclude_bucket_id:
+        if bucket.get("id") in excluded:
             continue
         meta = bucket.get("metadata", {})
         try:
@@ -2615,7 +2623,12 @@ async def write_project_workzone_update(
 # 工具 3：grow — 生长，一天的碎片长成记忆
 # =============================================================
 @mcp.tool()
-async def grow(content: str) -> str:
+async def grow(
+    content: str,
+    source_platform: str = "chatgpt",
+    source_surface: str = "daily_window",
+    source_window: str = "",
+) -> str:
     """日记归档。自动拆分长内容为多个记忆桶。"""
     _mark_runtime_activity("grow")
     await decay_engine.ensure_started()
@@ -2636,12 +2649,20 @@ async def grow(content: str) -> str:
     results = []
     created = 0
     merged = 0
+    bucket_ids: set[str] = set()
+    source_meta = {
+        "source_platform": source_platform or "chatgpt",
+        "source_surface": source_surface or "daily_window",
+        "source_window": source_window or "unknown",
+        "source_mode": "diary_digest",
+        "route_decision": "digest_memory",
+    }
 
     # --- Step 2: merge or create each item (with per-item error handling) ---
     # --- 逐条合并或新建（单条失败不影响其他）---
     for item in items:
         try:
-            result_name, is_merged, _bucket_id = await _merge_or_create(
+            result_name, is_merged, bucket_id = await _merge_or_create(
                 content=item["content"],
                 tags=item.get("tags", []),
                 importance=item.get("importance", 5),
@@ -2649,7 +2670,10 @@ async def grow(content: str) -> str:
                 valence=item.get("valence", 0.5),
                 arousal=item.get("arousal", 0.3),
                 name=item.get("name", ""),
+                extra_metadata=source_meta,
             )
+            if bucket_id:
+                bucket_ids.add(bucket_id)
 
             if is_merged:
                 results.append(f"  📎 合并 → {result_name}")
@@ -2669,7 +2693,13 @@ async def grow(content: str) -> str:
             results.append(f"  ⚠️ 失败: {item.get('name', '未知条目')}")
 
     summary = f"=== 日记整理完成 ===\n拆分为 {len(items)} 条 | 新建 {created} 桶 | 合并 {merged} 桶\n"
-    return summary + "\n".join(results)
+    related_text = await _associated_memory_text(content, exclude_bucket_ids=bucket_ids)
+    source_line = (
+        f"source_platform={source_meta['source_platform']} | "
+        f"source_surface={source_meta['source_surface']} | "
+        f"route_decision={source_meta['route_decision']}\n"
+    )
+    return summary + source_line + "\n".join(results) + "\n" + related_text
 
 
 # =============================================================
