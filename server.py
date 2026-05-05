@@ -919,6 +919,11 @@ async def _associated_memory_text(content: str, exclude_bucket_id: str = "", lim
             f"  name: {meta.get('name', 'unknown')}\n"
             f"  score: {bucket.get('score', 'unknown')}\n"
             f"  domains: {','.join(meta.get('domain', [])) or 'unknown'}\n"
+            f"  source_platform: {meta.get('source_platform', 'unknown')}\n"
+            f"  source_surface: {meta.get('source_surface', 'unknown')}\n"
+            f"  source_window: {meta.get('source_window', 'unknown')}\n"
+            f"  source_mode: {meta.get('source_mode', 'unknown')}\n"
+            f"  route_decision: {meta.get('route_decision', 'unknown')}\n"
             f"  preview: {snippet or '（空）'}"
         )
         if len(rows) >= limit:
