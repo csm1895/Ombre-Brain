@@ -121,6 +121,8 @@ RUNTIME_FEATURES = {
     "runtime_features_mcp_tool": True,
     "runtime_tool_manifest_http_endpoint": True,
     "runtime_tool_manifest_mcp_tool": True,
+    "runtime_schema_expectations_http_endpoint": True,
+    "runtime_schema_expectations_mcp_tool": True,
     "associated_memory_after_writes": True,
     "associated_memory_shows_provenance": True,
     "hold_provenance_defaults": True,
@@ -136,6 +138,8 @@ RUNTIME_FEATURE_COMMITS = {
     "runtime_features_mcp_tool": "self",
     "runtime_tool_manifest_http_endpoint": "self",
     "runtime_tool_manifest_mcp_tool": "self",
+    "runtime_schema_expectations_http_endpoint": "self",
+    "runtime_schema_expectations_mcp_tool": "self",
     "associated_memory_after_writes": "4d93255",
     "hold_provenance_defaults": "926b92d",
     "associated_memory_shows_provenance": "c4448c8",
@@ -163,6 +167,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "reconsolidate",
     "reject_diary_review",
     "runtime_features",
+    "runtime_schema_expectations",
     "runtime_tool_manifest",
     "save_tail_context",
     "search",
@@ -176,6 +181,87 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "write_project_workzone_update",
 ]
 RUNTIME_DUPLICATE_REGISTRATION_NAMES = ["peek", "post"]
+RUNTIME_EXPECTED_TOOL_SCHEMAS = {
+    "grow": {
+        "required": ["content"],
+        "optional": ["source_platform", "source_surface", "source_window"],
+        "defaults": {
+            "source_platform": "claude_chat",
+            "source_surface": "daily_window",
+            "source_window": "",
+        },
+        "notes": "Connector schemas may lag and show only content; server supports provenance defaults.",
+    },
+    "hold": {
+        "required": ["content"],
+        "optional": [
+            "tags",
+            "importance",
+            "pinned",
+            "feel",
+            "source_bucket",
+            "valence",
+            "arousal",
+            "weather",
+            "time_of_day",
+            "location",
+            "atmosphere",
+            "source_platform",
+            "source_surface",
+            "source_window",
+            "source_mode",
+            "route_decision",
+        ],
+    },
+    "write_project_workzone_update": {
+        "required": ["content"],
+        "optional": ["type", "source_platform", "source_surface", "source_window"],
+        "defaults": {
+            "type": "workzone",
+            "source_platform": "codex",
+            "source_surface": "project_window",
+        },
+    },
+    "write_diary_draft": {
+        "required": ["content"],
+        "optional": ["source_platform", "source_surface", "source_window"],
+    },
+    "enqueue_night_clean_input": {
+        "required": ["content"],
+        "optional": ["source_platform", "source_surface", "source_window"],
+    },
+    "list_diary_reviews": {
+        "required": [],
+        "optional": ["limit"],
+        "expected_output_fields": [
+            "risk_flags",
+            "duplicate_candidate",
+            "similarity_score",
+            "duplicate_of",
+            "duplicate_source_status",
+        ],
+    },
+    "read_diary_review": {
+        "required": ["review_id"],
+        "optional": [],
+    },
+    "read_latest_dream_text": {
+        "required": [],
+        "optional": [],
+    },
+    "runtime_features": {
+        "required": [],
+        "optional": [],
+    },
+    "runtime_tool_manifest": {
+        "required": [],
+        "optional": [],
+    },
+    "runtime_schema_expectations": {
+        "required": [],
+        "optional": [],
+    },
+}
 
 
 def _runtime_git_sha() -> str:
@@ -212,6 +298,7 @@ def _runtime_features_payload() -> dict:
             "grow_optional_source_fields": "server_supported; connector_schema_may_lag",
             "write_after_read": "associated_memories returned by routed writes",
             "tool_manifest_endpoint": "/api/runtime/tool-manifest",
+            "schema_expectations_endpoint": "/api/runtime/schema-expectations",
             "provenance_fields": [
                 "source_platform",
                 "source_surface",
@@ -243,12 +330,28 @@ def _runtime_tool_manifest_payload() -> dict:
             "read_diary_review",
             "read_latest_dream_text",
             "runtime_features",
+            "runtime_schema_expectations",
             "runtime_tool_manifest",
             "check_logs",
         ],
         "schema_refresh_hint": (
             "If this manifest lists a tool but ChatGPT/Codex does not expose it, "
             "the server supports it and the connector schema likely needs reconnect/refresh."
+        ),
+    }
+
+
+def _runtime_schema_expectations_payload() -> dict:
+    return {
+        "status": "ok",
+        "features_version": RUNTIME_FEATURES_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "schema_expectations": RUNTIME_EXPECTED_TOOL_SCHEMAS,
+        "schema_expectation_count": len(RUNTIME_EXPECTED_TOOL_SCHEMAS),
+        "comparison_rule": (
+            "If a tool appears in runtime tool manifest but exposed connector arguments "
+            "are missing fields listed here, the server supports the fields and the "
+            "connector schema likely needs reconnect/refresh."
         ),
     }
 
@@ -719,6 +822,13 @@ async def api_runtime_tool_manifest(request):
     from starlette.responses import JSONResponse
 
     return JSONResponse(_runtime_tool_manifest_payload())
+
+
+@mcp.custom_route("/api/runtime/schema-expectations", methods=["GET"])
+async def api_runtime_schema_expectations(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(_runtime_schema_expectations_payload())
 
 
 # =============================================================
@@ -2940,6 +3050,13 @@ async def runtime_tool_manifest() -> str:
     """读取 server 期望暴露的 MCP 工具清单，用于排查 schema 缓存。"""
     _mark_system_event("runtime_tool_manifest")
     return json.dumps(_runtime_tool_manifest_payload(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def runtime_schema_expectations() -> str:
+    """读取关键 MCP 工具的预期参数 schema，用于排查参数缓存。"""
+    _mark_system_event("runtime_schema_expectations")
+    return json.dumps(_runtime_schema_expectations_payload(), ensure_ascii=False, indent=2)
 
 
 # =============================================================
