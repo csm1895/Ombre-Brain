@@ -39,6 +39,7 @@ import logging
 import asyncio
 import time
 import shutil
+from difflib import SequenceMatcher
 from datetime import datetime, timezone, timedelta
 
 CST = timezone(timedelta(hours=8))
@@ -137,6 +138,10 @@ CADENCE_DREAM_DIR = os.environ.get(
 CADENCE_REVIEW_DIR = os.environ.get(
     "OMBRE_CADENCE_REVIEW_DIR",
     os.path.join(CADENCE_DRAFT_DIR, "diary_review"),
+)
+DIARY_REVIEW_DUPLICATE_THRESHOLD = max(
+    0.5,
+    min(0.99, float(os.environ.get("OMBRE_DIARY_REVIEW_DUPLICATE_THRESHOLD", "0.88"))),
 )
 CADENCE_RECEIPT_DIR = os.environ.get(
     "OMBRE_CADENCE_RECEIPT_DIR",
@@ -1093,15 +1098,77 @@ def _diary_review_risk_flags(text: str) -> list[str]:
     return sorted(set(flags))
 
 
-def _diary_review_metadata(candidate_text: str) -> dict[str, str]:
+def _diary_review_similarity_text(text: str) -> str:
+    body = _strip_frontmatter_text(text or "")
+    normalized = strip_wikilinks(body).lower()
+    cleaned = "".join(ch if ch.isalnum() else " " for ch in normalized)
+    return " ".join(cleaned.split())[:5000]
+
+
+def _diary_review_similarity(left: str, right: str) -> float:
+    left_text = _diary_review_similarity_text(left)
+    right_text = _diary_review_similarity_text(right)
+    if not left_text or not right_text:
+        return 0.0
+    return SequenceMatcher(None, left_text, right_text).ratio()
+
+
+def _diary_review_duplicate_meta(candidate_text: str, exclude_review_id: str = "") -> dict[str, str]:
+    dirs = _cadence_review_dirs()
+    safe_exclude = _safe_review_id(exclude_review_id)
+    best_score = 0.0
+    best_review_id = ""
+    best_status = ""
+
+    for status, directory in dirs.items():
+        if not os.path.isdir(directory):
+            continue
+        for name in os.listdir(directory):
+            if not name.endswith(".md") or name == safe_exclude:
+                continue
+            path = os.path.join(directory, name)
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    existing_text = handle.read()
+            except Exception:
+                continue
+            score = _diary_review_similarity(candidate_text, existing_text)
+            if score > best_score:
+                best_score = score
+                best_review_id = name
+                best_status = status
+
+    is_duplicate = best_score >= DIARY_REVIEW_DUPLICATE_THRESHOLD
+    return {
+        "duplicate_candidate": "true" if is_duplicate else "false",
+        "similarity_score": f"{best_score:.2f}",
+        "duplicate_of": best_review_id if is_duplicate else "none",
+        "duplicate_source_status": best_status if is_duplicate else "none",
+    }
+
+
+def _diary_review_metadata(candidate_text: str, duplicate_meta: dict[str, str] | None = None) -> dict[str, str]:
     risk_flags = _diary_review_risk_flags(candidate_text)
+    duplicate_meta = duplicate_meta or {}
+    if duplicate_meta.get("duplicate_candidate") == "true":
+        risk_flags.append("duplicate_candidate")
+    risk_flags = sorted(set(risk_flags))
+    review_level = "normal"
+    if set(risk_flags) - {"duplicate_candidate"}:
+        review_level = "blocked"
+    elif "duplicate_candidate" in risk_flags:
+        review_level = "duplicate"
     return {
         "narrator": DIARY_REVIEW_NARRATOR,
         "brain_owner": DIARY_REVIEW_BRAIN_OWNER,
         "mentioned_entities": DIARY_REVIEW_MENTIONED_ENTITIES,
         "laid_entities": DIARY_REVIEW_LAID_ENTITIES,
         "risk_flags": ",".join(risk_flags) if risk_flags else "none",
-        "review_level": "blocked" if risk_flags else "normal",
+        "review_level": review_level,
+        "duplicate_candidate": duplicate_meta.get("duplicate_candidate", "false"),
+        "similarity_score": duplicate_meta.get("similarity_score", "0.00"),
+        "duplicate_of": duplicate_meta.get("duplicate_of", "none"),
+        "duplicate_source_status": duplicate_meta.get("duplicate_source_status", "none"),
     }
 
 
@@ -1112,7 +1179,8 @@ def _write_diary_review_candidate(candidate_path: str, timestamp: str, mode: str
     review_path = os.path.join(dirs["pending"], review_id)
     with open(candidate_path, "r", encoding="utf-8") as source:
         candidate_text = source.read().strip()
-    review_meta = _diary_review_metadata(candidate_text)
+    duplicate_meta = _diary_review_duplicate_meta(candidate_text, exclude_review_id=review_id)
+    review_meta = _diary_review_metadata(candidate_text, duplicate_meta=duplicate_meta)
     review_lines = [
         "---",
         "source: cadence_deepseek",
@@ -1125,6 +1193,10 @@ def _write_diary_review_candidate(candidate_path: str, timestamp: str, mode: str
         f"laid_entities: {review_meta['laid_entities']}",
         f"risk_flags: {review_meta['risk_flags']}",
         f"review_level: {review_meta['review_level']}",
+        f"duplicate_candidate: {review_meta['duplicate_candidate']}",
+        f"similarity_score: {review_meta['similarity_score']}",
+        f"duplicate_of: {review_meta['duplicate_of']}",
+        f"duplicate_source_status: {review_meta['duplicate_source_status']}",
         f"candidate_path: {candidate_path}",
         f"created_at: {now_cst.isoformat()}",
         "---",
@@ -3033,6 +3105,10 @@ async def list_diary_reviews(limit: int = 10) -> str:
             f"  brain_owner: {meta.get('brain_owner', 'unknown')}\n"
             f"  review_level: {meta.get('review_level', 'unknown')}\n"
             f"  risk_flags: {meta.get('risk_flags', 'unknown')}\n"
+            f"  duplicate_candidate: {meta.get('duplicate_candidate', 'unknown')}\n"
+            f"  similarity_score: {meta.get('similarity_score', 'unknown')}\n"
+            f"  duplicate_of: {meta.get('duplicate_of', 'unknown')}\n"
+            f"  duplicate_source_status: {meta.get('duplicate_source_status', 'unknown')}\n"
             f"  mentioned_entities: {meta.get('mentioned_entities', 'unknown')}\n"
             f"  laid_entities: {meta.get('laid_entities', 'unknown')}\n"
             f"  preview: {snippet or '（空候选）'}"
@@ -3066,6 +3142,10 @@ async def read_diary_review(review_id: str) -> str:
             f"- brain_owner: {meta.get('brain_owner', 'unknown')}\n"
             f"- review_level: {meta.get('review_level', 'unknown')}\n"
             f"- risk_flags: {meta.get('risk_flags', 'unknown')}\n"
+            f"- duplicate_candidate: {meta.get('duplicate_candidate', 'unknown')}\n"
+            f"- similarity_score: {meta.get('similarity_score', 'unknown')}\n"
+            f"- duplicate_of: {meta.get('duplicate_of', 'unknown')}\n"
+            f"- duplicate_source_status: {meta.get('duplicate_source_status', 'unknown')}\n"
             f"- mentioned_entities: {meta.get('mentioned_entities', 'unknown')}\n"
             f"- laid_entities: {meta.get('laid_entities', 'unknown')}\n\n"
             f"{body or '（空候选）'}"
@@ -3089,10 +3169,17 @@ async def accept_diary_review(review_id: str) -> str:
         meta = _simple_frontmatter(text)
         risk_flags = meta.get("risk_flags", "")
         review_level = meta.get("review_level", "")
-        if "identity_pov_conflict" in risk_flags or review_level == "blocked":
+        if (
+            "identity_pov_conflict" in risk_flags
+            or "duplicate_candidate" in risk_flags
+            or review_level in ("blocked", "duplicate")
+        ):
             return (
-                f"候选存在身份视角风险，已阻止收入: {safe_id}\n"
+                f"候选存在风险，已阻止收入: {safe_id}\n"
                 f"risk_flags: {risk_flags or 'unknown'}\n"
+                f"review_level: {review_level or 'unknown'}\n"
+                f"duplicate_of: {meta.get('duplicate_of', 'unknown')}\n"
+                f"similarity_score: {meta.get('similarity_score', 'unknown')}\n"
                 "请先 reject_diary_review，或重新生成修正后的候选。"
             )
         body = text.split("---", 2)[2].strip() if text.startswith("---") and len(text.split("---", 2)) == 3 else text
