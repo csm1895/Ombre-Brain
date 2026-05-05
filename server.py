@@ -119,6 +119,7 @@ _runtime_ready_last_error = ""
 RUNTIME_FEATURES = {
     "runtime_features_http_endpoint": True,
     "runtime_features_mcp_tool": True,
+    "runtime_tool_manifest_http_endpoint": True,
     "associated_memory_after_writes": True,
     "associated_memory_shows_provenance": True,
     "hold_provenance_defaults": True,
@@ -132,12 +133,46 @@ RUNTIME_FEATURES_VERSION = "2026-05-05.provenance-v1"
 RUNTIME_FEATURE_COMMITS = {
     "runtime_features_http_endpoint": "a4528ec",
     "runtime_features_mcp_tool": "self",
+    "runtime_tool_manifest_http_endpoint": "self",
     "associated_memory_after_writes": "4d93255",
     "hold_provenance_defaults": "926b92d",
     "associated_memory_shows_provenance": "c4448c8",
     "grow_provenance_defaults": "7c32ed6",
     "bucket_metadata_provenance_persistence": "c662017",
 }
+RUNTIME_EXPECTED_MCP_TOOLS = [
+    "accept_diary_review",
+    "breath",
+    "check_logs",
+    "dream",
+    "dream_fragments",
+    "enqueue_night_clean_input",
+    "grow",
+    "hold",
+    "list_diary_reviews",
+    "mark_flashbulb",
+    "merge_into_event",
+    "morning_report",
+    "peek",
+    "post",
+    "pulse",
+    "read_diary_review",
+    "read_latest_dream_text",
+    "reconsolidate",
+    "reject_diary_review",
+    "runtime_features",
+    "save_tail_context",
+    "search",
+    "see_image",
+    "set_attachment",
+    "set_iron_rule",
+    "set_user_state",
+    "startup_bridge",
+    "trace",
+    "write_diary_draft",
+    "write_project_workzone_update",
+]
+RUNTIME_DUPLICATE_REGISTRATION_NAMES = ["peek", "post"]
 
 
 def _runtime_git_sha() -> str:
@@ -173,6 +208,7 @@ def _runtime_features_payload() -> dict:
         "schema_notes": {
             "grow_optional_source_fields": "server_supported; connector_schema_may_lag",
             "write_after_read": "associated_memories returned by routed writes",
+            "tool_manifest_endpoint": "/api/runtime/tool-manifest",
             "provenance_fields": [
                 "source_platform",
                 "source_surface",
@@ -181,6 +217,35 @@ def _runtime_features_payload() -> dict:
                 "route_decision",
             ],
         },
+    }
+
+
+def _runtime_tool_manifest_payload() -> dict:
+    expected = sorted(set(RUNTIME_EXPECTED_MCP_TOOLS))
+    return {
+        "status": "ok",
+        "features_version": RUNTIME_FEATURES_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "expected_mcp_tools": expected,
+        "expected_mcp_tool_count": len(expected),
+        "duplicate_registration_names": RUNTIME_DUPLICATE_REGISTRATION_NAMES,
+        "critical_life_window_tools": [
+            "startup_bridge",
+            "breath",
+            "hold",
+            "grow",
+            "write_diary_draft",
+            "enqueue_night_clean_input",
+            "list_diary_reviews",
+            "read_diary_review",
+            "read_latest_dream_text",
+            "runtime_features",
+            "check_logs",
+        ],
+        "schema_refresh_hint": (
+            "If this manifest lists a tool but ChatGPT/Codex does not expose it, "
+            "the server supports it and the connector schema likely needs reconnect/refresh."
+        ),
     }
 
 # --- Dual-cadence draft-only execution / 双节奏草稿执行 ---
@@ -643,6 +708,13 @@ async def api_runtime_features(request):
     from starlette.responses import JSONResponse
 
     return JSONResponse(_runtime_features_payload())
+
+
+@mcp.custom_route("/api/runtime/tool-manifest", methods=["GET"])
+async def api_runtime_tool_manifest(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(_runtime_tool_manifest_payload())
 
 
 # =============================================================
