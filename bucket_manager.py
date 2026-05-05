@@ -258,6 +258,26 @@ class BucketManager:
             post["source_bucket"] = kwargs["source_bucket"]
         if "source_type" in kwargs:
             post["source_type"] = kwargs["source_type"]
+        for field in (
+            "source_platform",
+            "source_surface",
+            "source_window",
+            "source_mode",
+            "route_decision",
+            "last_source_platform",
+            "last_source_surface",
+            "last_source_window",
+            "narrator",
+            "brain_owner",
+            "review_level",
+            "risk_flags",
+            "duplicate_candidate",
+            "similarity_score",
+            "duplicate_of",
+            "duplicate_source_status",
+        ):
+            if field in kwargs:
+                post[field] = kwargs[field]
         if "layer" in kwargs:
             post["layer"] = kwargs["layer"]
         if "status" in kwargs:
