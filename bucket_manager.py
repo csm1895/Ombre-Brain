@@ -269,6 +269,8 @@ class BucketManager:
             "last_source_window",
             "narrator",
             "brain_owner",
+            "mentioned_entities",
+            "laid_entities",
             "review_level",
             "risk_flags",
             "duplicate_candidate",

@@ -2771,7 +2771,7 @@ async def write_project_workzone_update(
 @mcp.tool()
 async def grow(
     content: str,
-    source_platform: str = "chatgpt",
+    source_platform: str = "claude_chat",
     source_surface: str = "daily_window",
     source_window: str = "",
 ) -> str:
@@ -2797,7 +2797,7 @@ async def grow(
     merged = 0
     bucket_ids: set[str] = set()
     source_meta = {
-        "source_platform": source_platform or "chatgpt",
+        "source_platform": source_platform or "claude_chat",
         "source_surface": source_surface or "daily_window",
         "source_window": source_window or "unknown",
         "source_mode": "diary_digest",
