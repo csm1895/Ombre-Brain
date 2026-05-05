@@ -750,10 +750,11 @@ async def _merge_or_create(
     pinned: bool = False,
     feel: bool = False,
     source_bucket: str = "",
-) -> tuple[str, bool]:
+    extra_metadata: dict = None,
+) -> tuple[str, bool, str]:
     """
     Check if a similar bucket exists for merging; merge if so, create if not.
-    Returns (bucket_id_or_name, is_merged).
+    Returns (bucket_id_or_name, is_merged, bucket_id).
     检查是否有相似桶可合并，有则合并，无则新建。
     返回 (桶ID或名称, 是否合并)。
     """
@@ -777,8 +778,10 @@ async def _merge_or_create(
             }
             if sensory:
                 update_kwargs["sensory"] = sensory
+            if extra_metadata:
+                update_kwargs.update(extra_metadata)
             await bucket_mgr.update(bucket["id"], **update_kwargs)
-            return bucket["metadata"].get("name", bucket["id"]), True
+            return bucket["metadata"].get("name", bucket["id"]), True, bucket["id"]
         except Exception as e:
             logger.warning(f"Merge failed, creating new / 合并失败，新建: {e}")
 
@@ -806,6 +809,8 @@ async def _merge_or_create(
         update_kwargs["type"] = "feel"
     if source_bucket:
         update_kwargs["source_bucket"] = source_bucket
+    if extra_metadata:
+        update_kwargs.update(extra_metadata)
     if update_kwargs:
         await bucket_mgr.update(bucket_id, **update_kwargs)
     
@@ -813,7 +818,7 @@ async def _merge_or_create(
     if sensory:
         await bucket_mgr.update(bucket_id, sensory=sensory)
     
-    return bucket_id, False
+    return bucket_id, False, bucket_id
 
 
 # =============================================================
@@ -2368,6 +2373,11 @@ async def hold(
     source_bucket: str = "",
     valence: float = -1,
     arousal: float = -1,
+    source_platform: str = "unknown",
+    source_surface: str = "unknown",
+    source_window: str = "",
+    source_mode: str = "memory",
+    route_decision: str = "main_hold",
 ) -> str:
     """
     存储单条记忆。自动打标+合并相似桶。
@@ -2417,9 +2427,19 @@ async def hold(
     suggested_name = analysis.get("suggested_name", "")
 
     all_tags = list(dict.fromkeys(auto_tags + extra_tags))
+    source_meta = {
+        "source_platform": source_platform or "unknown",
+        "source_surface": source_surface or "unknown",
+        "source_window": source_window or "unknown",
+        "source_mode": source_mode or "memory",
+        "route_decision": route_decision or "main_hold",
+        "last_source_platform": source_platform or "unknown",
+        "last_source_surface": source_surface or "unknown",
+        "last_source_window": source_window or "unknown",
+    }
 
     # --- Step 2: merge or create / 合并或新建 ---
-    result_name, is_merged = await _merge_or_create(
+    result_name, is_merged, bucket_id = await _merge_or_create(
         content=content,
         tags=all_tags,
         importance=importance,
@@ -2432,16 +2452,26 @@ async def hold(
         pinned=pinned,
         feel=feel,
         source_bucket=source_bucket,
+        extra_metadata=source_meta,
     )
+    related_text = await _associated_memory_text(content, exclude_bucket_id=bucket_id)
 
     if is_merged:
         return (
             f"已合并到现有记忆桶: {result_name}\n"
-            f"主题域: {', '.join(domain)} | 情感: V{valence:.1f}/A{arousal:.1f}"
+            f"主题域: {', '.join(domain)} | 情感: V{valence:.1f}/A{arousal:.1f}\n"
+            f"source_platform={source_meta['source_platform']} | "
+            f"source_surface={source_meta['source_surface']} | "
+            f"route_decision={source_meta['route_decision']}\n"
+            f"{related_text}"
         )
     return (
         f"已创建新记忆桶: {result_name}\n"
-        f"主题域: {', '.join(domain)} | 情感: V{valence:.1f}/A{arousal:.1f} | 标签: {', '.join(all_tags)}"
+        f"主题域: {', '.join(domain)} | 情感: V{valence:.1f}/A{arousal:.1f} | 标签: {', '.join(all_tags)}\n"
+        f"source_platform={source_meta['source_platform']} | "
+        f"source_surface={source_meta['source_surface']} | "
+        f"route_decision={source_meta['route_decision']}\n"
+        f"{related_text}"
     )
 
 
@@ -2606,7 +2636,7 @@ async def grow(content: str) -> str:
     # --- 逐条合并或新建（单条失败不影响其他）---
     for item in items:
         try:
-            result_name, is_merged = await _merge_or_create(
+            result_name, is_merged, _bucket_id = await _merge_or_create(
                 content=item["content"],
                 tags=item.get("tags", []),
                 importance=item.get("importance", 5),
