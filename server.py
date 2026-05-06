@@ -129,6 +129,8 @@ RUNTIME_FEATURES = {
     "runtime_connector_check_mcp_tool": True,
     "runtime_diary_review_health_http_endpoint": True,
     "runtime_diary_review_health_mcp_tool": True,
+    "runtime_life_window_check_http_endpoint": True,
+    "runtime_life_window_check_mcp_tool": True,
     "runtime_upstream_watch_http_endpoint": True,
     "runtime_upstream_watch_mcp_tool": True,
     "runtime_source_routes_http_endpoint": True,
@@ -156,6 +158,8 @@ RUNTIME_FEATURE_COMMITS = {
     "runtime_connector_check_mcp_tool": "self",
     "runtime_diary_review_health_http_endpoint": "self",
     "runtime_diary_review_health_mcp_tool": "self",
+    "runtime_life_window_check_http_endpoint": "self",
+    "runtime_life_window_check_mcp_tool": "self",
     "runtime_upstream_watch_http_endpoint": "self",
     "runtime_upstream_watch_mcp_tool": "self",
     "runtime_source_routes_http_endpoint": "self",
@@ -190,6 +194,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "runtime_diary_review_health",
     "runtime_diagnostics",
     "runtime_features",
+    "runtime_life_window_check",
     "runtime_schema_expectations",
     "runtime_source_routes",
     "runtime_tool_manifest",
@@ -297,6 +302,10 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "optional": ["observed_tools", "observed_schemas_json"],
     },
     "runtime_diary_review_health": {
+        "required": [],
+        "optional": [],
+    },
+    "runtime_life_window_check": {
         "required": [],
         "optional": [],
     },
@@ -459,6 +468,7 @@ def _runtime_tool_manifest_payload() -> dict:
             "read_diary_review",
             "read_latest_dream_text",
             "runtime_diary_review_health",
+            "runtime_life_window_check",
             "runtime_connector_check",
             "runtime_diagnostics",
             "runtime_features",
@@ -626,6 +636,63 @@ def _runtime_diary_review_health_payload() -> dict:
     }
 
 
+def _runtime_life_window_check_payload() -> dict:
+    manifest = _runtime_tool_manifest_payload()
+    diagnostics = _runtime_diagnostics_payload()
+    diary_health = _runtime_diary_review_health_payload()
+    source_routes = _runtime_source_routes_payload()
+    must_have_tools = [
+        "startup_bridge",
+        "breath",
+        "hold",
+        "grow",
+        "write_diary_draft",
+        "enqueue_night_clean_input",
+        "list_diary_reviews",
+        "read_diary_review",
+        "read_latest_dream_text",
+        "runtime_life_window_check",
+        "runtime_connector_check",
+        "runtime_diagnostics",
+        "runtime_diary_review_health",
+        "runtime_source_routes",
+    ]
+    return {
+        "status": "ok",
+        "features_version": RUNTIME_FEATURES_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "read_only",
+        "main_brain_write": False,
+        "purpose": "One-shot readiness view for ChatGPT daily/life windows.",
+        "life_window_ready_if": [
+            "This payload is reachable.",
+            "startup_bridge_ready is true.",
+            "The daily window can see the must_have_tools in its exposed MCP tool list.",
+            "diary_review_health summary has no blocked or identity_pov_conflict pending candidates.",
+        ],
+        "manual_reconnect_needed_if": [
+            "A tool appears in expected_mcp_tools or must_have_tools but is absent from the ChatGPT exposed tool list.",
+            "A tool appears but its arguments are older than runtime_schema_expectations.",
+            "The connector settings page shows an older connection date after a deploy.",
+        ],
+        "must_have_tools": must_have_tools,
+        "expected_mcp_tool_count": manifest.get("expected_mcp_tool_count", 0),
+        "critical_life_window_tool_count": len(manifest.get("critical_life_window_tools", [])),
+        "startup_bridge_ready": diagnostics.get("startup_bridge_ready", False),
+        "endpoints": diagnostics.get("endpoints", {}),
+        "diary_review_summary": diary_health.get("summary", {}),
+        "latest_pending_diary_review": (diary_health.get("latest_pending") or [])[:1],
+        "canonical_daily_source_route": source_routes.get("source_route_guide", {})
+            .get("canonical_routes", {})
+            .get("chatgpt_daily", {}),
+        "safe_boundaries": [
+            "This check does not read secrets, tokens, cookies, passwords, or account storage.",
+            "This check does not accept/reject diary reviews.",
+            "This check does not write main brain memory.",
+        ],
+    }
+
+
 def _parse_observed_tools(observed_tools: str) -> list[str]:
     raw = (observed_tools or "").strip()
     if not raw:
@@ -790,6 +857,7 @@ def _runtime_diagnostics_payload() -> dict:
             "diagnostics": "/api/runtime/diagnostics",
             "connector_check": "/api/runtime/connector-check",
             "diary_review_health": "/api/runtime/diary-review-health",
+            "life_window_check": "/api/runtime/life-window-check",
             "upstream_watch": "/api/runtime/upstream-watch",
             "source_routes": "/api/runtime/source-routes",
         },
@@ -1319,6 +1387,13 @@ async def api_runtime_diary_review_health(request):
     from starlette.responses import JSONResponse
 
     return JSONResponse(_runtime_diary_review_health_payload())
+
+
+@mcp.custom_route("/api/runtime/life-window-check", methods=["GET"])
+async def api_runtime_life_window_check(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(_runtime_life_window_check_payload())
 
 
 @mcp.custom_route("/api/runtime/upstream-watch", methods=["GET"])
@@ -3657,6 +3732,13 @@ async def runtime_diary_review_health() -> str:
     """读取 diary_review 队列健康总览；只读，不验收、不写主脑。"""
     _mark_system_event("runtime_diary_review_health")
     return json.dumps(_runtime_diary_review_health_payload(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def runtime_life_window_check() -> str:
+    """生活窗一键预检：工具、schema、来源路由、diary_review 队列，只读。"""
+    _mark_system_event("runtime_life_window_check")
+    return json.dumps(_runtime_life_window_check_payload(), ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
