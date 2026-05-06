@@ -104,6 +104,10 @@ SHARED_CHANNEL_ALLOWED_SENDERS = ("yechenyi", "guyanshen", "system")
 SHARED_CHANNEL_VISIBILITY = "shared_tech"
 SHARED_CHANNEL_VERSION = "shared_channel_v1"
 SHARED_CHANNEL_MAX_CONTENT_CHARS = 4000
+SHARED_CHANNEL_CANONICAL_BASE_URL = os.environ.get(
+    "OMBRE_SHARED_CHANNEL_CANONICAL_BASE_URL",
+    "https://yechenyi.zeabur.app",
+).rstrip("/")
 
 # --- CC online status tracking / CC 在线状态追踪 ---
 # CC heartbeats every 2 min; if no heartbeat for 5 min, considered offline
@@ -647,6 +651,14 @@ def _shared_channel_status_payload() -> dict:
         "write_scope": "shared_channel_only",
         "main_brain_write": False,
         "visibility": SHARED_CHANNEL_VISIBILITY,
+        "canonical_base_url": SHARED_CHANNEL_CANONICAL_BASE_URL,
+        "canonical_mcp_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/mcp",
+        "canonical_status_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/shared/channel/status",
+        "canonical_note": (
+            "For one actual shared living-room wall, both Yechenyi and Guyanshen should connect "
+            "their MCP clients to the same canonical_mcp_url. Using separate service URLs creates "
+            "separate local wall copies."
+        ),
         "storage_dir": _shared_channel_dir(),
         "message_count": len(messages),
         "latest_message_id": messages[-1].get("id", "") if messages else "",
@@ -1138,8 +1150,8 @@ def _runtime_upgrade_backlog_payload() -> dict:
             {
                 "id": "guyanshen_shared_channel_connector",
                 "state": "planned",
-                "symptom": "Guyanshen still needs to connect to the shared channel protocol after his own hippocampus upgrade is stable.",
-                "safe_next_step": "Use the same MCP tools and sender=guyanshen; do not copy Yechenyi private memory into the shared wall.",
+                "symptom": "Guyanshen still needs to connect to the canonical shared channel after his own hippocampus upgrade is stable.",
+                "safe_next_step": "Use canonical_mcp_url from shared_status with sender=guyanshen; do not copy Yechenyi private memory into the shared wall.",
             },
             {
                 "id": "project_workzone_write_timeout",
