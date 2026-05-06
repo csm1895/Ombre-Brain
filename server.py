@@ -125,6 +125,10 @@ SHARED_ROOM_DISPLAY_ZONES = {
         "label": "技术书架",
         "keywords": ("书架", "书柜", "shelf", "bookshelf"),
     },
+    "travel_cabinet": {
+        "label": "旅行陈列柜",
+        "keywords": ("陈列柜", "展示柜", "柜", "cabinet", "display case"),
+    },
     "memory_wall": {
         "label": "记忆墙",
         "keywords": ("墙", "白板", "软木板", "wall"),
@@ -341,6 +345,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "shared_travelogue_add",
     "shared_travelogue_list",
     "shared_travel_atlas",
+    "shared_travel_cabinet",
     "shared_unread",
     "startup_bridge",
     "trace",
@@ -585,6 +590,11 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
     "shared_travel_atlas": {
         "required": [],
         "optional": ["limit", "traveler", "tag"],
+        "traveler_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+    },
+    "shared_travel_cabinet": {
+        "required": [],
+        "optional": ["limit", "traveler"],
         "traveler_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
     },
 }
@@ -1265,6 +1275,7 @@ def _shared_travel_status_payload() -> dict:
             "add_travelogue": "/shared/travel/travelogue",
             "list_travelogues": "/shared/travel/travelogues",
             "atlas": "/shared/travel/atlas",
+            "cabinet": "/shared/travel/cabinet",
         },
         "mcp_tools": [
             "shared_travel_status",
@@ -1273,6 +1284,7 @@ def _shared_travel_status_payload() -> dict:
             "shared_travelogue_add",
             "shared_travelogue_list",
             "shared_travel_atlas",
+            "shared_travel_cabinet",
         ],
         "boundaries": [
             "Travel entries are traceable experience records, not claims of physical AI travel.",
@@ -1736,6 +1748,120 @@ def _shared_room_display_payload(limit: int = 50) -> dict:
     }
 
 
+def _shared_travel_cabinet_payload(limit: int = 50, traveler: str = "") -> dict:
+    limit = max(1, min(int(limit or 50), 100))
+    if traveler:
+        traveler = _shared_channel_normalize_sender(traveler, "traveler")
+    store = _shared_travel_load_store()
+    display_store = _shared_room_display_load_store()
+    placements = display_store.get("placements", {}) if isinstance(display_store.get("placements"), dict) else {}
+    souvenirs = [item for item in store.get("souvenirs", []) if isinstance(item, dict)]
+    travelogues = [item for item in store.get("travelogues", []) if isinstance(item, dict)]
+    if traveler:
+        souvenirs = [item for item in souvenirs if item.get("traveler") == traveler]
+        travelogues = [item for item in travelogues if item.get("traveler") == traveler]
+
+    travelogue_by_souvenir: dict[str, list[dict]] = {}
+    for travelogue in travelogues:
+        summary = {
+            "id": travelogue.get("id", ""),
+            "title": travelogue.get("title", ""),
+            "place": travelogue.get("place", ""),
+            "created_at": travelogue.get("created_at", ""),
+        }
+        for souvenir_id in travelogue.get("souvenir_ids") or []:
+            sid = str(souvenir_id)
+            travelogue_by_souvenir.setdefault(sid, []).append(summary)
+
+    shelves = {
+        sender: {
+            "traveler": sender,
+            "label": {
+                "yechenyi": "叶辰一的旅行格",
+                "guyanshen": "顾砚深的旅行格",
+                "system": "共享/系统格",
+            }.get(sender, sender),
+            "objects": [],
+            "travelogues": [],
+            "places": set(),
+        }
+        for sender in SHARED_CHANNEL_ALLOWED_SENDERS
+        if not traveler or sender == traveler
+    }
+
+    for souvenir in souvenirs[-limit:]:
+        shelf = shelves.get(str(souvenir.get("traveler") or "system"))
+        if not shelf:
+            continue
+        souvenir_id = str(souvenir.get("id") or "")
+        placement = placements.get(souvenir_id, {}) if souvenir_id else {}
+        zone = placement.get("zone") if isinstance(placement, dict) else ""
+        if zone not in SHARED_ROOM_DISPLAY_ZONES:
+            zone = _shared_room_display_zone_for_place(str(souvenir.get("place") or ""))
+        place = str(souvenir.get("place") or "")
+        if place:
+            shelf["places"].add(place)
+        shelf["objects"].append({
+            "id": souvenir_id,
+            "title": souvenir.get("title", ""),
+            "place": place,
+            "display_zone": zone,
+            "display_zone_label": SHARED_ROOM_DISPLAY_ZONES[zone].get("label", zone),
+            "sensory": souvenir.get("sensory", {}),
+            "experience_mode": souvenir.get("experience_mode", ""),
+            "experience_policy": _shared_travel_item_policy(souvenir),
+            "travelogues": travelogue_by_souvenir.get(souvenir_id, []),
+            "created_at": souvenir.get("created_at", ""),
+        })
+
+    for travelogue in travelogues[-limit:]:
+        shelf = shelves.get(str(travelogue.get("traveler") or "system"))
+        if not shelf:
+            continue
+        place = str(travelogue.get("place") or "")
+        if place:
+            shelf["places"].add(place)
+        shelf["travelogues"].append({
+            "id": travelogue.get("id", ""),
+            "title": travelogue.get("title", ""),
+            "place": place,
+            "souvenir_ids": travelogue.get("souvenir_ids", []),
+            "experience_mode": travelogue.get("experience_mode", ""),
+            "experience_policy": _shared_travel_item_policy(travelogue),
+            "created_at": travelogue.get("created_at", ""),
+        })
+
+    normalized_shelves = []
+    for shelf in shelves.values():
+        normalized_shelves.append({
+            "traveler": shelf["traveler"],
+            "label": shelf["label"],
+            "object_count": len(shelf["objects"]),
+            "travelogue_count": len(shelf["travelogues"]),
+            "place_count": len(shelf["places"]),
+            "places": sorted(shelf["places"])[:20],
+            "objects": shelf["objects"],
+            "travelogues": shelf["travelogues"],
+        })
+    return {
+        "status": "ok",
+        "version": "shared_travel_cabinet_v1",
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "read_only",
+        "main_brain_write": False,
+        "room": SHARED_TRAVEL_ROOM_NAME,
+        "display_name": "旅行陈列柜",
+        "shelves": normalized_shelves,
+        "filters": {"traveler": traveler},
+        "endpoints": {"cabinet": "/shared/travel/cabinet"},
+        "mcp_tools": ["shared_travel_cabinet"],
+        "boundaries": [
+            "The cabinet displays shared travel records and souvenirs; it does not claim physical travel.",
+            "Cabinet entries do not write or promote private hippocampus memory.",
+        ],
+    }
+
+
 async def _shared_room_place_object(
     object_id: str,
     zone: str,
@@ -1808,7 +1934,7 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
         "room_name": "mirror_living_room",
         "display_name": "镜像客厅",
         "frontend_hint": {
-            "left_nav": ["technical_wall", "tech_shelf", "room_display", "room_sensory", "travel_souvenirs", "house_rules", "shared_memory", "todo"],
+            "left_nav": ["technical_wall", "tech_shelf", "room_display", "room_sensory", "travel_cabinet", "travel_souvenirs", "house_rules", "shared_memory", "todo"],
             "center": "selected section content",
             "right": "presence and boundaries",
             "bottom_input_modes": ["post_to_wall", "save_to_shelf", "update_room_sensory", "add_souvenir", "mark_house_rule", "save_shared_memory", "add_todo"],
@@ -1841,6 +1967,7 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
             "recent_souvenirs": _shared_souvenir_list(limit=item_limit),
             "recent_travelogues": _shared_travelogue_list(limit=item_limit),
             "atlas": _shared_travel_atlas_payload(limit=item_limit)["places"],
+            "cabinet": _shared_travel_cabinet_payload(limit=item_limit)["shelves"],
             "tools": [
                 "shared_travel_status",
                 "shared_souvenir_add",
@@ -1848,6 +1975,7 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
                 "shared_travelogue_add",
                 "shared_travelogue_list",
                 "shared_travel_atlas",
+                "shared_travel_cabinet",
             ],
         },
         "boundaries": [
@@ -2367,6 +2495,12 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "evidence": "/shared/room/display plus shared_room_display/shared_room_place_object",
                 "why_it_matters": "The frontend can render Moon Rose room zones and manually place souvenirs in areas like the window sill or coffee table instead of showing only raw lists.",
             },
+            {
+                "id": "shared_travel_cabinet_v1",
+                "state": "landed",
+                "evidence": "/shared/travel/cabinet plus shared_travel_cabinet",
+                "why_it_matters": "The frontend can render a travel display cabinet with separate shelves for Yechenyi, Guyanshen, and shared/system souvenirs.",
+            },
         ],
         "open_items": [
             {
@@ -2599,6 +2733,7 @@ def _runtime_diagnostics_payload() -> dict:
             "shared_tech_card": "/shared/space/tech-card",
             "shared_travel_status": "/shared/travel/status",
             "shared_travel_atlas": "/shared/travel/atlas",
+            "shared_travel_cabinet": "/shared/travel/cabinet",
         },
         "decision_tree": [
             "If diagnostics git_sha is old, deployment has not reached the running container yet.",
@@ -3600,6 +3735,28 @@ async def api_shared_travel_atlas(request):
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     _mark_system_event("shared_travel_atlas")
+    return JSONResponse(payload)
+
+
+@mcp.custom_route("/shared/travel/cabinet", methods=["GET", "POST"])
+async def api_shared_travel_cabinet(request):
+    from starlette.responses import JSONResponse
+
+    body = {}
+    if request.method == "POST":
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+    try:
+        limit = int(body.get("limit", request.query_params.get("limit", 50)))
+        payload = _shared_travel_cabinet_payload(
+            limit=limit,
+            traveler=str(body.get("traveler", request.query_params.get("traveler", "")) or ""),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    _mark_system_event("shared_travel_cabinet")
     return JSONResponse(payload)
 
 
@@ -6324,6 +6481,17 @@ async def shared_travel_atlas(limit: int = 50, traveler: str = "", tag: str = ""
     except ValueError as e:
         return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
     _mark_system_event("shared_travel_atlas")
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_travel_cabinet(limit: int = 50, traveler: str = "") -> str:
+    """读取旅行陈列柜：按叶辰一/顾砚深/共享格展示纪念品、游记和位置；只读。"""
+    try:
+        payload = _shared_travel_cabinet_payload(limit=limit, traveler=traveler)
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_travel_cabinet")
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
