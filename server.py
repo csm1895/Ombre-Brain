@@ -2222,10 +2222,120 @@ def _shared_room_environment_day_phase(hour: int) -> dict:
     }
 
 
+def _shared_room_weather_code_label(code) -> str:
+    try:
+        code = int(code)
+    except Exception:
+        return "未知"
+    labels = {
+        0: "晴",
+        1: "大部晴朗",
+        2: "局部多云",
+        3: "阴",
+        45: "雾",
+        48: "霜雾",
+        51: "小毛毛雨",
+        53: "毛毛雨",
+        55: "较强毛毛雨",
+        61: "小雨",
+        63: "中雨",
+        65: "大雨",
+        71: "小雪",
+        73: "中雪",
+        75: "大雪",
+        80: "阵雨",
+        81: "较强阵雨",
+        82: "强阵雨",
+        95: "雷雨",
+        96: "雷雨伴冰雹",
+        99: "强雷雨伴冰雹",
+    }
+    return labels.get(code, f"天气代码 {code}")
+
+
+def _shared_room_hangzhou_weather() -> dict:
+    weather = {
+        "connected": False,
+        "provider": "open-meteo",
+        "location": {
+            "id": "hangzhou",
+            "name": "杭州",
+            "latitude": 30.2741,
+            "longitude": 120.1551,
+            "timezone": "Asia/Shanghai",
+            "privacy_note": "Fixed public city weather; no device location, account, token, or IP lookup is used by this app.",
+        },
+        "current": {},
+        "error": "",
+    }
+    if os.environ.get("OMBRE_ROOM_WEATHER_ENABLED", "true").lower() in ("0", "false", "no"):
+        weather["error"] = "disabled_by_env"
+        return weather
+
+    try:
+        response = httpx.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": weather["location"]["latitude"],
+                "longitude": weather["location"]["longitude"],
+                "current": "temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m",
+                "timezone": "Asia/Shanghai",
+            },
+            timeout=2.5,
+        )
+        response.raise_for_status()
+        data = response.json()
+        current = data.get("current") if isinstance(data, dict) else {}
+        if not isinstance(current, dict):
+            raise ValueError("missing current weather")
+        weather["connected"] = True
+        weather["current"] = {
+            "time": current.get("time", ""),
+            "temperature_c": current.get("temperature_2m"),
+            "apparent_temperature_c": current.get("apparent_temperature"),
+            "relative_humidity_percent": current.get("relative_humidity_2m"),
+            "precipitation_mm": current.get("precipitation"),
+            "wind_speed_kmh": current.get("wind_speed_10m"),
+            "weather_code": current.get("weather_code"),
+            "weather_label": _shared_room_weather_code_label(current.get("weather_code")),
+        }
+    except Exception as e:
+        weather["error"] = str(e)[:200]
+    return weather
+
+
+def _shared_room_weather_atmosphere(weather: dict) -> dict:
+    if not weather.get("connected"):
+        return {
+            "sight": "",
+            "sound": "远处有海浪声；杭州天气暂时拿不到时，房间仍按真实时间和季节运行。",
+            "felt": "",
+        }
+    current = weather.get("current") if isinstance(weather.get("current"), dict) else {}
+    label = current.get("weather_label") or "天气"
+    temp = current.get("temperature_c")
+    wind = current.get("wind_speed_kmh")
+    precipitation = current.get("precipitation_mm")
+    sight = f"杭州当前天气：{label}"
+    if temp is not None:
+        sight += f"，{temp}°C"
+    if precipitation not in (None, 0, 0.0):
+        sight += f"，降水 {precipitation}mm"
+    sound = "远处有海浪声。"
+    if precipitation not in (None, 0, 0.0):
+        sound += "杭州有雨，窗边可以带一点雨天玻璃感。"
+    felt = "房间天光跟随北京时间，天气锚点取杭州。"
+    if wind is not None:
+        felt += f" 风速约 {wind}km/h。"
+    return {"sight": sight, "sound": sound, "felt": felt}
+
+
 def _shared_room_environment_payload() -> dict:
     now = datetime.now(CST)
     season = _shared_room_environment_season(now.month)
     day_phase = _shared_room_environment_day_phase(now.hour)
+    weather = _shared_room_hangzhou_weather()
+    weather_atmosphere = _shared_room_weather_atmosphere(weather)
     return {
         "status": "ok",
         "version": SHARED_ROOM_ENVIRONMENT_VERSION,
@@ -2238,7 +2348,16 @@ def _shared_room_environment_payload() -> dict:
             "timezone": "Asia/Shanghai",
             "now": now.isoformat(),
             "derived_from_real_time": True,
-            "weather_connected": False,
+            "weather_connected": bool(weather.get("connected")),
+        },
+        "weather": weather,
+        "future_location_policy": {
+            "user_authorized_location_supported_later": True,
+            "current_mode": "fixed_city_hangzhou",
+            "notes": [
+                "A future Gaode/Amap layer can use Qianqian-authorized location states such as home, office, or on-the-way.",
+                "That layer should be explicit, switchable, auditable, and should avoid storing raw tracks by default.",
+            ],
         },
         "day_phase": day_phase,
         "season": season,
@@ -2261,15 +2380,19 @@ def _shared_room_environment_payload() -> dict:
             },
         },
         "atmosphere": {
-            "sight": f"{day_phase['light']} {season['garden']}",
-            "sound": "远处有海浪声；天气接口未接入前，雨声和风声先由感官状态手动写入。",
-            "felt": "空间状态随真实时间切换；季节用于前端植被和色调变化。",
+            "sight": " ".join(part for part in [day_phase["light"], season["garden"], weather_atmosphere["sight"]] if part),
+            "sound": weather_atmosphere["sound"],
+            "felt": " ".join(part for part in [
+                "空间状态随真实时间切换；季节用于前端植被和色调变化。",
+                weather_atmosphere["felt"],
+            ] if part),
         },
         "endpoints": {"environment": "/shared/room/environment"},
         "mcp_tools": ["shared_room_environment"],
         "boundaries": [
             "This environment state is derived display context; it does not write private memory.",
-            "Weather is intentionally not fetched yet; no external location or account data is used.",
+            "Weather uses fixed public Hangzhou coordinates; no device location, account data, secrets, or tokens are used.",
+            "If weather fetch fails, the room keeps working from real time and season state.",
             "Frontend can render this as 2D zones first, then upgrade to generated images or 3D later.",
         ],
     }
