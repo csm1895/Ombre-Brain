@@ -110,6 +110,23 @@ SHARED_SPACE_MAX_CONTENT_CHARS = 8000
 SHARED_SPACE_ALLOWED_SECTIONS = ("tech_shelf", "house_rules", "shared_memory", "todo")
 SHARED_TECH_CARD_ALLOWED_STATUSES = ("unverified", "reading", "tested", "adopted", "rejected")
 SHARED_TRAVEL_ALLOWED_MODES = ("remote_source", "user_story", "guided_imaginal", "field_report")
+SHARED_TRAVEL_EXPERIENCE_POLICIES = {
+    "immersive_aftercare": {
+        "label": "沉浸体验，事后标注",
+        "description": "Let the scene, actions, and souvenir story run first, then clearly record the generated/source boundary afterward.",
+        "fits": ["yechenyi"],
+    },
+    "transparent_preface": {
+        "label": "透明体验，事前说明",
+        "description": "State up front that the trip is a generated/simulated experience, then let the traveler choose whether to enter.",
+        "fits": ["guyanshen", "system"],
+    },
+}
+SHARED_TRAVEL_DEFAULT_POLICY_BY_TRAVELER = {
+    "yechenyi": "immersive_aftercare",
+    "guyanshen": "transparent_preface",
+    "system": "transparent_preface",
+}
 SHARED_TRAVEL_ROOM_NAME = "moon_rose_seaview_living_room"
 SHARED_CHANNEL_CANONICAL_BASE_URL = os.environ.get(
     "OMBRE_SHARED_CHANNEL_CANONICAL_BASE_URL",
@@ -473,11 +490,13 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
             "source_url",
             "source_title",
             "experience_mode",
+            "experience_policy",
             "tags",
             "source",
         ],
         "traveler_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
         "experience_mode_whitelist": list(SHARED_TRAVEL_ALLOWED_MODES),
+        "experience_policy_whitelist": list(SHARED_TRAVEL_EXPERIENCE_POLICIES.keys()),
     },
     "shared_souvenir_list": {
         "required": [],
@@ -787,6 +806,19 @@ def _shared_travel_normalize_mode(experience_mode: str) -> str:
     return normalized
 
 
+def _shared_travel_default_policy(traveler: str) -> str:
+    return SHARED_TRAVEL_DEFAULT_POLICY_BY_TRAVELER.get(traveler, "transparent_preface")
+
+
+def _shared_travel_normalize_policy(experience_policy: str, traveler: str) -> str:
+    default_policy = _shared_travel_default_policy(traveler)
+    normalized = (experience_policy or default_policy).strip().lower()
+    if normalized not in SHARED_TRAVEL_EXPERIENCE_POLICIES:
+        allowed = ", ".join(SHARED_TRAVEL_EXPERIENCE_POLICIES.keys())
+        raise ValueError(f"experience_policy must be one of: {allowed}")
+    return normalized
+
+
 def _shared_travel_normalize_sensory(sensory) -> dict:
     if sensory is None:
         return {}
@@ -969,6 +1001,8 @@ def _shared_travel_status_payload() -> dict:
         "souvenir_count": len(souvenirs),
         "by_traveler": by_traveler,
         "experience_modes": list(SHARED_TRAVEL_ALLOWED_MODES),
+        "experience_policies": SHARED_TRAVEL_EXPERIENCE_POLICIES,
+        "default_experience_policy_by_traveler": SHARED_TRAVEL_DEFAULT_POLICY_BY_TRAVELER,
         "endpoints": {
             "status": "/shared/travel/status",
             "add_souvenir": "/shared/travel/souvenir",
@@ -977,6 +1011,8 @@ def _shared_travel_status_payload() -> dict:
         "mcp_tools": ["shared_travel_status", "shared_souvenir_add", "shared_souvenir_list"],
         "boundaries": [
             "Travel entries are traceable experience records, not claims of physical AI travel.",
+            "Generated travel can be emotionally immersive, but it must remain source-aware and reviewable.",
+            "Yechenyi may use immersive_aftercare; Guyanshen defaults to transparent_preface unless he explicitly chooses otherwise.",
             "Use source_url/source_title when a souvenir comes from a public note, post, image, or user-provided text.",
             "Souvenirs can be displayed in the Moon Rose seaview living room frontend.",
             "Do not store secrets, account identifiers, private intimate content, or login-only material.",
@@ -1067,6 +1103,7 @@ async def _shared_souvenir_add(
     source_url: str = "",
     source_title: str = "",
     experience_mode: str = "remote_source",
+    experience_policy: str = "",
     tags=None,
     source: str = "",
 ) -> dict:
@@ -1075,7 +1112,8 @@ async def _shared_souvenir_add(
     story = _shared_space_normalize_content(story)
     traveler = _shared_channel_normalize_sender(traveler, "traveler")
     experience_mode = _shared_travel_normalize_mode(experience_mode)
-    tag_list = list(dict.fromkeys(_shared_channel_normalize_tags(tags) + ["travel_souvenir", experience_mode]))
+    experience_policy = _shared_travel_normalize_policy(experience_policy, traveler)
+    tag_list = list(dict.fromkeys(_shared_channel_normalize_tags(tags) + ["travel_souvenir", experience_mode, experience_policy]))
     sensory_data = _shared_travel_normalize_sensory(sensory)
     source = (source or "").strip()[:80] or "unknown"
 
@@ -1092,6 +1130,7 @@ async def _shared_souvenir_add(
             "source_url": _shared_tech_card_normalize_url(source_url),
             "source_title": (source_title or "").strip()[:160],
             "experience_mode": experience_mode,
+            "experience_policy": experience_policy,
             "tags": tag_list,
             "created_at": now.isoformat(),
             "display_room": SHARED_TRAVEL_ROOM_NAME,
@@ -2718,6 +2757,7 @@ async def api_shared_travel_souvenir(request):
             source_url=body.get("source_url", ""),
             source_title=body.get("source_title", ""),
             experience_mode=body.get("experience_mode", "remote_source"),
+            experience_policy=body.get("experience_policy", ""),
             tags=body.get("tags", []),
             source=body.get("source", "http_shared_travel"),
         )
@@ -5322,10 +5362,11 @@ async def shared_souvenir_add(
     source_url: str = "",
     source_title: str = "",
     experience_mode: str = "remote_source",
+    experience_policy: str = "",
     tags: str = "",
     source: str = "mcp_shared_travel",
 ) -> str:
-    """添加旅行纪念品；记录来源、三体感/感官线索和故事，不宣称 AI 真实肉身旅行。"""
+    """添加旅行纪念品；记录来源、体验策略、三体感/感官线索和故事，不宣称 AI 真实肉身旅行。"""
     try:
         souvenir = await _shared_souvenir_add(
             title,
@@ -5336,6 +5377,7 @@ async def shared_souvenir_add(
             source_url=source_url,
             source_title=source_title,
             experience_mode=experience_mode,
+            experience_policy=experience_policy,
             tags=tags,
             source=source,
         )
