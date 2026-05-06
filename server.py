@@ -110,6 +110,7 @@ SHARED_ROOM_ENVIRONMENT_VERSION = "shared_room_environment_v1"
 SHARED_ROOM_BRIEF_VERSION = "shared_room_brief_v1"
 SHARED_ROOM_SEARCH_VERSION = "shared_room_search_v1"
 SHARED_ROOM_TIMELINE_VERSION = "shared_room_timeline_v1"
+SHARED_ROOM_STATS_VERSION = "shared_room_stats_v1"
 SHARED_CHANNEL_MAX_CONTENT_CHARS = 4000
 SHARED_SPACE_MAX_CONTENT_CHARS = 8000
 SHARED_SPACE_ALLOWED_SECTIONS = ("tech_shelf", "house_rules", "shared_memory", "todo")
@@ -237,6 +238,8 @@ RUNTIME_FEATURES = {
     "shared_room_search_mcp_tool": True,
     "shared_room_timeline_http_endpoint": True,
     "shared_room_timeline_mcp_tool": True,
+    "shared_room_stats_http_endpoint": True,
+    "shared_room_stats_mcp_tool": True,
     "shared_room_sensory_http_endpoints": True,
     "shared_room_sensory_mcp_tools": True,
     "shared_tech_card_http_endpoint": True,
@@ -298,6 +301,8 @@ RUNTIME_FEATURE_COMMITS = {
     "shared_room_search_mcp_tool": "self",
     "shared_room_timeline_http_endpoint": "self",
     "shared_room_timeline_mcp_tool": "self",
+    "shared_room_stats_http_endpoint": "self",
+    "shared_room_stats_mcp_tool": "self",
     "shared_room_sensory_http_endpoints": "self",
     "shared_room_sensory_mcp_tools": "self",
     "shared_tech_card_http_endpoint": "self",
@@ -361,6 +366,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "shared_room_brief",
     "shared_room_search",
     "shared_room_timeline",
+    "shared_room_stats",
     "shared_room_display",
     "shared_room_place_object",
     "shared_room_sensory_status",
@@ -564,6 +570,10 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "required": [],
         "optional": ["limit", "scope"],
         "scope_whitelist": ["all", "wall", "space", "travel", "room", "pet"],
+    },
+    "shared_room_stats": {
+        "required": [],
+        "optional": [],
     },
     "shared_room_display": {
         "required": [],
@@ -2809,6 +2819,70 @@ def _shared_room_timeline_payload(limit: int = 30, scope: str = "all") -> dict:
     }
 
 
+def _shared_room_stats_payload() -> dict:
+    channel_store = _shared_channel_load_store()
+    space_status = _shared_space_status_payload()
+    travel_status = _shared_travel_status_payload()
+    display = _shared_room_display_payload(limit=100)
+    pet = _shared_pet_status_payload()
+    environment = _shared_room_environment_payload()
+    timeline = _shared_room_timeline_payload(limit=1)
+    today = datetime.now(CST).strftime("%Y-%m-%d")
+    messages = [m for m in channel_store.get("messages", []) if isinstance(m, dict)]
+    today_wall_count = len([m for m in messages if str(m.get("created_at", "")).startswith(today)])
+    display_counts = {
+        zone.get("zone", ""): zone.get("object_count", 0)
+        for zone in display.get("zones", [])
+        if isinstance(zone, dict)
+    }
+    return {
+        "status": "ok",
+        "version": SHARED_ROOM_STATS_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "read_only",
+        "main_brain_write": False,
+        "generated_at": datetime.now(CST).isoformat(),
+        "counts": {
+            "wall_messages": len(messages),
+            "wall_messages_today": today_wall_count,
+            "shared_space_items": space_status.get("item_count", 0),
+            "tech_shelf_items": space_status.get("section_counts", {}).get("tech_shelf", 0),
+            "house_rules": space_status.get("section_counts", {}).get("house_rules", 0),
+            "shared_memory_items": space_status.get("section_counts", {}).get("shared_memory", 0),
+            "todo_items": space_status.get("section_counts", {}).get("todo", 0),
+            "souvenirs": travel_status.get("souvenir_count", 0),
+            "travelogues": travel_status.get("travelogue_count", 0),
+            "timeline_events": timeline.get("event_count", 0),
+            "display_objects": sum(int(value or 0) for value in display_counts.values()),
+            "pet_events": len(_shared_pet_load_store().get("events", [])),
+        },
+        "by_traveler": travel_status.get("by_traveler_counts", {}),
+        "display_zones": display_counts,
+        "pet": {
+            "adopted": pet.get("adopted", False),
+            "needs": pet.get("needs", {}),
+        },
+        "environment": {
+            "day_phase": environment.get("day_phase", {}).get("id", ""),
+            "season": environment.get("season", {}).get("id", ""),
+            "weather_connected": environment.get("time_source", {}).get("weather_connected", False),
+            "weather_label": environment.get("weather", {}).get("current", {}).get("weather_label", ""),
+            "temperature_c": environment.get("weather", {}).get("current", {}).get("temperature_c"),
+        },
+        "safety": {
+            "auth_token_configured": bool(_shared_channel_auth_token()),
+            "cadence_shared_runtime_protected": _cadence_shared_runtime_isolation_payload().get("protected", False),
+        },
+        "endpoints": {"stats": "/shared/room/stats"},
+        "mcp_tools": ["shared_room_stats"],
+        "boundaries": [
+            "Stats are read-only aggregate counts over shared living-room stores.",
+            "Stats do not inspect private hippocampus buckets, account data, logs, secrets, or raw filesystem paths.",
+            "Stats do not promote anything into private memory.",
+        ],
+    }
+
+
 async def _shared_channel_post_message(
     content: str,
     sender: str,
@@ -3355,6 +3429,12 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "why_it_matters": "Daily and engineering windows can review recent living-room activity in one chronological feed.",
             },
             {
+                "id": "shared_room_stats_v1",
+                "state": "landed",
+                "evidence": "/shared/room/stats plus shared_room_stats",
+                "why_it_matters": "A future frontend can show living-room growth counters without stitching every section by hand.",
+            },
+            {
                 "id": "cadence_shared_runtime_isolation_v1",
                 "state": "landed",
                 "evidence": "/api/runtime/diagnostics and /api/cadence/status expose cadence_shared_runtime_isolation",
@@ -3593,6 +3673,7 @@ def _runtime_diagnostics_payload() -> dict:
             "shared_room_brief": "/shared/room/brief",
             "shared_room_search": "/shared/room/search",
             "shared_room_timeline": "/shared/room/timeline",
+            "shared_room_stats": "/shared/room/stats",
             "shared_room_display": "/shared/room/display",
             "shared_room_sensory_status": "/shared/room/sensory/status",
             "shared_pet_status": "/shared/pet/status",
@@ -4506,6 +4587,14 @@ async def api_shared_room_timeline(request):
         return JSONResponse({"error": str(e)}, status_code=400)
     _mark_system_event("shared_room_timeline")
     return JSONResponse(payload)
+
+
+@mcp.custom_route("/shared/room/stats", methods=["GET"])
+async def api_shared_room_stats(request):
+    from starlette.responses import JSONResponse
+
+    _mark_system_event("shared_room_stats")
+    return JSONResponse(_shared_room_stats_payload())
 
 
 @mcp.custom_route("/shared/room/display", methods=["GET"])
@@ -7382,6 +7471,13 @@ async def shared_room_timeline(limit: int = 30, scope: str = "all") -> str:
         return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
     _mark_system_event("shared_room_timeline")
     return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_room_stats() -> str:
+    """读取共享客厅统计：墙、书架、旅行、陈列、宠物、天气和安全计数；只读。"""
+    _mark_system_event("shared_room_stats")
+    return json.dumps(_shared_room_stats_payload(), ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
