@@ -108,6 +108,10 @@ SHARED_CHANNEL_CANONICAL_BASE_URL = os.environ.get(
     "OMBRE_SHARED_CHANNEL_CANONICAL_BASE_URL",
     "https://yechenyi.zeabur.app",
 ).rstrip("/")
+WRITE_WRAPPER_ASSOCIATED_MEMORY_TIMEOUT_SECONDS = max(
+    0.5,
+    float(os.environ.get("OMBRE_WRITE_ASSOCIATED_MEMORY_TIMEOUT_SECONDS", "3")),
+)
 
 # --- CC online status tracking / CC 在线状态追踪 ---
 # CC heartbeats every 2 min; if no heartbeat for 5 min, considered offline
@@ -1155,9 +1159,9 @@ def _runtime_upgrade_backlog_payload() -> dict:
             },
             {
                 "id": "project_workzone_write_timeout",
-                "state": "needs_debug",
-                "symptom": "write_project_workzone_update can time out from Codex app while the runtime HTTP checks remain healthy.",
-                "safe_next_step": "Inspect wrapper write path separately: dehydrator, bucket create/update, associated memory search, and MCP transport timeout.",
+                "state": "mitigated",
+                "symptom": "write_project_workzone_update could time out from Codex app while the runtime HTTP checks remained healthy.",
+                "safe_next_step": "Post-write associated memory recall is now timeout-guarded; keep watching for dehydrator or bucket write latency separately.",
             },
             {
                 "id": "chatgpt_schema_refresh",
@@ -2386,8 +2390,36 @@ async def _write_wrapper_candidate(
     await bucket_mgr.update(bucket_id, tags=all_tags, **metadata)
     bucket = await bucket_mgr.get(bucket_id)
     bucket_name = bucket.get("metadata", {}).get("name", bucket_id) if bucket else bucket_id
-    related_text = await _associated_memory_text(content, exclude_bucket_id=bucket_id)
+    related_text = await _associated_memory_text_guarded(content, exclude_bucket_id=bucket_id)
     return bucket_id, bucket_name, related_text
+
+
+async def _associated_memory_text_guarded(
+    content: str,
+    exclude_bucket_id: str = "",
+    exclude_bucket_ids: set[str] | None = None,
+    limit: int = 3,
+) -> str:
+    """Bound post-write recall so writes cannot hang behind slow search/touch paths."""
+    try:
+        return await asyncio.wait_for(
+            _associated_memory_text(
+                content,
+                exclude_bucket_id=exclude_bucket_id,
+                exclude_bucket_ids=exclude_bucket_ids,
+                limit=limit,
+            ),
+            timeout=WRITE_WRAPPER_ASSOCIATED_MEMORY_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Associated memory search timed out after %.2fs; write already persisted",
+            WRITE_WRAPPER_ASSOCIATED_MEMORY_TIMEOUT_SECONDS,
+        )
+        return "associated_memories: skipped_timeout"
+    except Exception as e:
+        logger.warning(f"Associated memory search failed after write / 写入后关联记忆失败: {e}")
+        return "associated_memories: unavailable"
 
 
 async def _associated_memory_text(
