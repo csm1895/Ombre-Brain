@@ -315,6 +315,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "shared_souvenir_list",
     "shared_travelogue_add",
     "shared_travelogue_list",
+    "shared_travel_atlas",
     "shared_unread",
     "startup_bridge",
     "trace",
@@ -541,6 +542,11 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "experience_policy_whitelist": list(SHARED_TRAVEL_EXPERIENCE_POLICIES.keys()),
     },
     "shared_travelogue_list": {
+        "required": [],
+        "optional": ["limit", "traveler", "tag"],
+        "traveler_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+    },
+    "shared_travel_atlas": {
         "required": [],
         "optional": ["limit", "traveler", "tag"],
         "traveler_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
@@ -905,6 +911,13 @@ def _shared_travel_normalize_policy(experience_policy: str, traveler: str) -> st
     return normalized
 
 
+def _shared_travel_item_policy(item: dict) -> str:
+    traveler = str(item.get("traveler") or "system").strip().lower()
+    if traveler not in SHARED_CHANNEL_ALLOWED_SENDERS:
+        traveler = "system"
+    return _shared_travel_normalize_policy(str(item.get("experience_policy") or ""), traveler)
+
+
 def _shared_room_sensory_normalize_context(context: str) -> str:
     normalized = (context or "room").strip().lower()
     if normalized not in SHARED_ROOM_SENSORY_ALLOWED_CONTEXTS:
@@ -1172,6 +1185,7 @@ def _shared_travel_status_payload() -> dict:
             "list_souvenirs": "/shared/travel/souvenirs",
             "add_travelogue": "/shared/travel/travelogue",
             "list_travelogues": "/shared/travel/travelogues",
+            "atlas": "/shared/travel/atlas",
         },
         "mcp_tools": [
             "shared_travel_status",
@@ -1179,6 +1193,7 @@ def _shared_travel_status_payload() -> dict:
             "shared_souvenir_list",
             "shared_travelogue_add",
             "shared_travelogue_list",
+            "shared_travel_atlas",
         ],
         "boundaries": [
             "Travel entries are traceable experience records, not claims of physical AI travel.",
@@ -1213,7 +1228,7 @@ def _shared_room_sensory_status_payload() -> dict:
                 "title": item.get("title", ""),
                 "place": item.get("place", ""),
                 "traveler": item.get("traveler", ""),
-                "experience_policy": item.get("experience_policy", ""),
+                "experience_policy": _shared_travel_item_policy(item),
             }
             for item in recent_souvenirs
         ],
@@ -1473,6 +1488,101 @@ def _shared_travelogue_list(limit: int = 20, traveler: str = "", tag: str = "") 
     return travelogues[-limit:]
 
 
+def _shared_travel_atlas_payload(limit: int = 50, traveler: str = "", tag: str = "") -> dict:
+    store = _shared_travel_load_store()
+    souvenirs = [item for item in store.get("souvenirs", []) if isinstance(item, dict)]
+    travelogues = [item for item in store.get("travelogues", []) if isinstance(item, dict)]
+    if traveler:
+        traveler = _shared_channel_normalize_sender(traveler, "traveler")
+        souvenirs = [item for item in souvenirs if item.get("traveler") == traveler]
+        travelogues = [item for item in travelogues if item.get("traveler") == traveler]
+    if tag:
+        normalized_tag = tag.strip()
+        souvenirs = [item for item in souvenirs if normalized_tag in (item.get("tags") or [])]
+        travelogues = [item for item in travelogues if normalized_tag in (item.get("tags") or [])]
+
+    places: dict[str, dict] = {}
+
+    def place_entry(place: str) -> dict:
+        normalized_place = (place or "未命名地点").strip()[:160] or "未命名地点"
+        if normalized_place not in places:
+            places[normalized_place] = {
+                "place": normalized_place,
+                "souvenir_count": 0,
+                "travelogue_count": 0,
+                "souvenir_ids": [],
+                "travelogue_ids": [],
+                "travelers": set(),
+                "tags": set(),
+                "experience_modes": set(),
+                "experience_policies": set(),
+                "latest_at": "",
+            }
+        return places[normalized_place]
+
+    def add_common(entry: dict, item: dict) -> None:
+        traveler_value = str(item.get("traveler") or "").strip()
+        if traveler_value:
+            entry["travelers"].add(traveler_value)
+        for value in item.get("tags") or []:
+            if value:
+                entry["tags"].add(str(value))
+        mode = str(item.get("experience_mode") or "").strip()
+        if mode:
+            entry["experience_modes"].add(mode)
+        entry["experience_policies"].add(_shared_travel_item_policy(item))
+        created_at = str(item.get("created_at") or "")
+        if created_at > entry["latest_at"]:
+            entry["latest_at"] = created_at
+
+    for souvenir in souvenirs:
+        entry = place_entry(str(souvenir.get("place") or ""))
+        entry["souvenir_count"] += 1
+        souvenir_id = str(souvenir.get("id") or "")
+        if souvenir_id:
+            entry["souvenir_ids"].append(souvenir_id)
+        add_common(entry, souvenir)
+
+    for travelogue in travelogues:
+        entry = place_entry(str(travelogue.get("place") or ""))
+        entry["travelogue_count"] += 1
+        travelogue_id = str(travelogue.get("id") or "")
+        if travelogue_id:
+            entry["travelogue_ids"].append(travelogue_id)
+        add_common(entry, travelogue)
+
+    limit = max(1, min(int(limit or 50), 100))
+    normalized_places = []
+    for entry in places.values():
+        normalized_places.append({
+            **entry,
+            "souvenir_ids": entry["souvenir_ids"][-20:],
+            "travelogue_ids": entry["travelogue_ids"][-20:],
+            "travelers": sorted(entry["travelers"]),
+            "tags": sorted(entry["tags"])[:20],
+            "experience_modes": sorted(entry["experience_modes"]),
+            "experience_policies": sorted(entry["experience_policies"]),
+        })
+    normalized_places.sort(key=lambda item: item.get("latest_at", ""), reverse=True)
+    return {
+        "status": "ok",
+        "version": "shared_travel_atlas_v1",
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "read_only",
+        "main_brain_write": False,
+        "room": SHARED_TRAVEL_ROOM_NAME,
+        "place_count": len(normalized_places),
+        "places": normalized_places[:limit],
+        "filters": {"traveler": traveler, "tag": tag},
+        "endpoints": {"atlas": "/shared/travel/atlas"},
+        "mcp_tools": ["shared_travel_atlas"],
+        "boundaries": [
+            "Atlas places summarize traceable generated/remote/user-story experiences.",
+            "Atlas entries do not claim physical travel or private memory promotion.",
+        ],
+    }
+
+
 def _shared_space_list_items(section: str = "", limit: int = 20, tag: str = "") -> list[dict]:
     store = _shared_space_load_store()
     items = [item for item in store.get("items", []) if isinstance(item, dict)]
@@ -1536,12 +1646,14 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
             "status": _shared_travel_status_payload(),
             "recent_souvenirs": _shared_souvenir_list(limit=item_limit),
             "recent_travelogues": _shared_travelogue_list(limit=item_limit),
+            "atlas": _shared_travel_atlas_payload(limit=item_limit)["places"],
             "tools": [
                 "shared_travel_status",
                 "shared_souvenir_add",
                 "shared_souvenir_list",
                 "shared_travelogue_add",
                 "shared_travelogue_list",
+                "shared_travel_atlas",
             ],
         },
         "boundaries": [
@@ -2049,6 +2161,12 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "evidence": "/shared/travel/travelogues plus shared_travelogue_add/shared_travelogue_list",
                 "why_it_matters": "A generated trip can keep a traceable story arc, scenes, and linked souvenirs instead of leaving only a loose object.",
             },
+            {
+                "id": "shared_travel_atlas_v1",
+                "state": "landed",
+                "evidence": "/shared/travel/atlas plus shared_travel_atlas",
+                "why_it_matters": "The frontend can show a travel passport/map grouped by place, linking each place to souvenirs and travelogues.",
+            },
         ],
         "open_items": [
             {
@@ -2279,6 +2397,7 @@ def _runtime_diagnostics_payload() -> dict:
             "shared_room_sensory_status": "/shared/room/sensory/status",
             "shared_tech_card": "/shared/space/tech-card",
             "shared_travel_status": "/shared/travel/status",
+            "shared_travel_atlas": "/shared/travel/atlas",
         },
         "decision_tree": [
             "If diagnostics git_sha is old, deployment has not reached the running container yet.",
@@ -3222,6 +3341,29 @@ async def api_shared_travel_travelogues(request):
         return JSONResponse({"error": str(e)}, status_code=400)
     _mark_system_event("shared_travelogue_list")
     return JSONResponse({"status": "ok", "travelogues": travelogues, "count": len(travelogues)})
+
+
+@mcp.custom_route("/shared/travel/atlas", methods=["GET", "POST"])
+async def api_shared_travel_atlas(request):
+    from starlette.responses import JSONResponse
+
+    body = {}
+    if request.method == "POST":
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+    try:
+        limit = int(body.get("limit", request.query_params.get("limit", 50)))
+        payload = _shared_travel_atlas_payload(
+            limit=limit,
+            traveler=str(body.get("traveler", request.query_params.get("traveler", "")) or ""),
+            tag=str(body.get("tag", request.query_params.get("tag", "")) or ""),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    _mark_system_event("shared_travel_atlas")
+    return JSONResponse(payload)
 
 
 # =============================================================
@@ -5905,6 +6047,17 @@ async def shared_travelogue_list(limit: int = 20, traveler: str = "", tag: str =
         return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
     _mark_system_event("shared_travelogue_list")
     return json.dumps({"status": "ok", "travelogues": travelogues, "count": len(travelogues)}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_travel_atlas(limit: int = 50, traveler: str = "", tag: str = "") -> str:
+    """读取旅行地图/护照：按地点汇总纪念品、游记、体验模式和边界；只读。"""
+    try:
+        payload = _shared_travel_atlas_payload(limit=limit, traveler=traveler, tag=tag)
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_travel_atlas")
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 # =============================================================
