@@ -39,6 +39,7 @@ import logging
 import asyncio
 import time
 import shutil
+import secrets
 from difflib import SequenceMatcher
 from datetime import datetime, timezone, timedelta
 
@@ -98,6 +99,12 @@ def _runtime_storage_base() -> str:
     )
     return os.environ.get("OMBRE_RUNTIME_DIR", os.path.join(bucket_base, "_runtime"))
 
+
+SHARED_CHANNEL_ALLOWED_SENDERS = ("yechenyi", "guyanshen", "system")
+SHARED_CHANNEL_VISIBILITY = "shared_tech"
+SHARED_CHANNEL_VERSION = "shared_channel_v1"
+SHARED_CHANNEL_MAX_CONTENT_CHARS = 4000
+
 # --- CC online status tracking / CC 在线状态追踪 ---
 # CC heartbeats every 2 min; if no heartbeat for 5 min, considered offline
 CC_HEARTBEAT_TIMEOUT = int(os.environ.get("CC_HEARTBEAT_TIMEOUT", "300"))
@@ -115,6 +122,7 @@ _runtime_boot_ts = time.time()
 _runtime_ready = False
 _runtime_ready_last_ok = 0.0
 _runtime_ready_last_error = ""
+_shared_channel_lock = asyncio.Lock()
 
 RUNTIME_FEATURES = {
     "runtime_features_http_endpoint": True,
@@ -139,6 +147,11 @@ RUNTIME_FEATURES = {
     "runtime_upstream_watch_mcp_tool": True,
     "runtime_source_routes_http_endpoint": True,
     "runtime_source_routes_mcp_tool": True,
+    "shared_channel_http_endpoints": True,
+    "shared_channel_mcp_tools": True,
+    "shared_channel_sender_whitelist": True,
+    "shared_channel_read_cursors": True,
+    "shared_channel_atomic_json": True,
     "associated_memory_after_writes": True,
     "associated_memory_shows_provenance": True,
     "hold_provenance_defaults": True,
@@ -172,6 +185,11 @@ RUNTIME_FEATURE_COMMITS = {
     "runtime_upstream_watch_mcp_tool": "self",
     "runtime_source_routes_http_endpoint": "self",
     "runtime_source_routes_mcp_tool": "self",
+    "shared_channel_http_endpoints": "self",
+    "shared_channel_mcp_tools": "self",
+    "shared_channel_sender_whitelist": "self",
+    "shared_channel_read_cursors": "self",
+    "shared_channel_atomic_json": "self",
     "associated_memory_after_writes": "4d93255",
     "hold_provenance_defaults": "926b92d",
     "associated_memory_shows_provenance": "c4448c8",
@@ -215,6 +233,12 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "set_attachment",
     "set_iron_rule",
     "set_user_state",
+    "shared_ack",
+    "shared_post",
+    "shared_read",
+    "shared_reply",
+    "shared_status",
+    "shared_unread",
     "startup_bridge",
     "trace",
     "write_diary_draft",
@@ -335,6 +359,34 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "required": [],
         "optional": [],
     },
+    "shared_post": {
+        "required": ["content", "sender"],
+        "optional": ["tags", "source"],
+        "sender_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+    },
+    "shared_read": {
+        "required": [],
+        "optional": ["limit", "before"],
+    },
+    "shared_reply": {
+        "required": ["reply_to_id", "content", "sender"],
+        "optional": ["tags", "source"],
+        "sender_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+    },
+    "shared_unread": {
+        "required": ["reader"],
+        "optional": [],
+        "reader_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+    },
+    "shared_ack": {
+        "required": ["reader"],
+        "optional": ["message_id"],
+        "reader_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+    },
+    "shared_status": {
+        "required": [],
+        "optional": [],
+    },
 }
 RUNTIME_UPSTREAM_WATCH_ITEMS = [
     {
@@ -429,6 +481,255 @@ def _runtime_git_sha() -> str:
         if value:
             return value
     return ""
+
+
+def _shared_channel_dir() -> str:
+    return os.path.join(_runtime_storage_base(), "shared_channel")
+
+
+def _shared_channel_messages_path() -> str:
+    return os.path.join(_shared_channel_dir(), "messages.json")
+
+
+def _shared_channel_cursors_path() -> str:
+    return os.path.join(_shared_channel_dir(), "read_cursors.json")
+
+
+def _shared_channel_auth_token() -> str:
+    return (
+        os.environ.get("OMBRE_SHARED_CHANNEL_TOKEN")
+        or os.environ.get("SHARED_CHANNEL_TOKEN")
+        or os.environ.get("OMBRE_API_KEY")
+        or ""
+    ).strip()
+
+
+def _shared_channel_http_token(request) -> str:
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        return auth_header.split(" ", 1)[1].strip()
+    return (
+        request.headers.get("X-Shared-Channel-Token", "")
+        or request.headers.get("X-API-Key", "")
+        or request.query_params.get("key", "")
+        or request.query_params.get("token", "")
+    ).strip()
+
+
+def _shared_channel_http_authorized(request) -> bool:
+    expected = _shared_channel_auth_token()
+    if not expected:
+        return True
+    supplied = _shared_channel_http_token(request)
+    return bool(supplied) and secrets.compare_digest(supplied, expected)
+
+
+def _read_json_file(path: str, fallback):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return fallback
+    except Exception as e:
+        logger.warning(f"Failed to read JSON file {path}: {e}")
+        return fallback
+
+
+def _atomic_write_json(path: str, data) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp_path = f"{path}.{os.getpid()}.{time.time_ns()}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    os.replace(tmp_path, path)
+
+
+def _shared_channel_empty_store() -> dict:
+    return {
+        "version": SHARED_CHANNEL_VERSION,
+        "visibility": SHARED_CHANNEL_VISIBILITY,
+        "messages": [],
+    }
+
+
+def _shared_channel_load_store() -> dict:
+    store = _read_json_file(_shared_channel_messages_path(), _shared_channel_empty_store())
+    if not isinstance(store, dict):
+        store = _shared_channel_empty_store()
+    messages = store.get("messages")
+    if not isinstance(messages, list):
+        store["messages"] = []
+    store.setdefault("version", SHARED_CHANNEL_VERSION)
+    store.setdefault("visibility", SHARED_CHANNEL_VISIBILITY)
+    return store
+
+
+def _shared_channel_load_cursors() -> dict:
+    cursors = _read_json_file(_shared_channel_cursors_path(), {})
+    return cursors if isinstance(cursors, dict) else {}
+
+
+def _shared_channel_normalize_sender(sender: str, field_name: str = "sender") -> str:
+    normalized = (sender or "").strip().lower()
+    if normalized not in SHARED_CHANNEL_ALLOWED_SENDERS:
+        allowed = ", ".join(SHARED_CHANNEL_ALLOWED_SENDERS)
+        raise ValueError(f"{field_name} must be one of: {allowed}")
+    return normalized
+
+
+def _shared_channel_normalize_content(content: str) -> str:
+    normalized = (content or "").strip()
+    if not normalized:
+        raise ValueError("content is required")
+    if len(normalized) > SHARED_CHANNEL_MAX_CONTENT_CHARS:
+        raise ValueError(f"content is too long; max {SHARED_CHANNEL_MAX_CONTENT_CHARS} chars")
+    return normalized
+
+
+def _shared_channel_normalize_tags(tags) -> list[str]:
+    if tags is None:
+        return []
+    raw_tags = tags
+    if isinstance(tags, str):
+        stripped = tags.strip()
+        if not stripped:
+            return []
+        try:
+            parsed = json.loads(stripped)
+            raw_tags = parsed if isinstance(parsed, list) else stripped
+        except Exception:
+            raw_tags = stripped
+    if isinstance(raw_tags, str):
+        raw_tags = raw_tags.replace("，", ",").split(",")
+    if not isinstance(raw_tags, list):
+        return []
+    normalized = []
+    for tag in raw_tags:
+        value = str(tag).strip()
+        if not value:
+            continue
+        normalized.append(value[:40])
+    return list(dict.fromkeys(normalized))[:12]
+
+
+def _shared_channel_message_index(messages: list[dict], message_id: str) -> int:
+    for idx, message in enumerate(messages):
+        if message.get("id") == message_id:
+            return idx
+    return -1
+
+
+def _shared_channel_visible_messages(store: dict, limit: int = 20, before: str = "") -> list[dict]:
+    messages = [m for m in store.get("messages", []) if isinstance(m, dict)]
+    if before:
+        idx = _shared_channel_message_index(messages, before)
+        if idx >= 0:
+            messages = messages[:idx]
+    limit = max(1, min(int(limit or 20), 100))
+    return messages[-limit:]
+
+
+def _shared_channel_unread_messages(store: dict, cursors: dict, reader: str) -> list[dict]:
+    messages = [m for m in store.get("messages", []) if isinstance(m, dict)]
+    cursor = str(cursors.get(reader, "") or "")
+    start_idx = _shared_channel_message_index(messages, cursor) + 1 if cursor else 0
+    return [m for m in messages[start_idx:] if m.get("sender") != reader]
+
+
+def _shared_channel_status_payload() -> dict:
+    store = _shared_channel_load_store()
+    cursors = _shared_channel_load_cursors()
+    messages = [m for m in store.get("messages", []) if isinstance(m, dict)]
+    return {
+        "status": "ok",
+        "version": SHARED_CHANNEL_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "shared_channel_only",
+        "main_brain_write": False,
+        "visibility": SHARED_CHANNEL_VISIBILITY,
+        "storage_dir": _shared_channel_dir(),
+        "message_count": len(messages),
+        "latest_message_id": messages[-1].get("id", "") if messages else "",
+        "allowed_senders": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+        "readers": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+        "read_cursors": {sender: str(cursors.get(sender, "") or "") for sender in SHARED_CHANNEL_ALLOWED_SENDERS},
+        "auth_token_supported": True,
+        "auth_token_configured": bool(_shared_channel_auth_token()),
+        "atomic_json_write": True,
+        "endpoints": {
+            "post": "/shared/channel/post",
+            "read": "/shared/channel/read",
+            "reply": "/shared/channel/reply",
+            "unread": "/shared/channel/unread",
+            "ack": "/shared/channel/ack",
+            "status": "/shared/channel/status",
+        },
+        "mcp_tools": ["shared_post", "shared_read", "shared_reply", "shared_unread", "shared_ack", "shared_status"],
+        "boundaries": [
+            "Shared channel is for technical, engineering, deployment, upgrade, and ordinary collaboration notes.",
+            "Do not share private intimate memory, account credentials, tokens, passwords, cookies, billing, or account identifiers.",
+            "Messages do not automatically write to Yechenyi or Guyanshen main brain memory.",
+        ],
+    }
+
+
+async def _shared_channel_post_message(
+    content: str,
+    sender: str,
+    tags=None,
+    source: str = "",
+    parent_id: str | None = None,
+) -> dict:
+    sender = _shared_channel_normalize_sender(sender)
+    content = _shared_channel_normalize_content(content)
+    tag_list = _shared_channel_normalize_tags(tags)
+    source = (source or "").strip()[:80] or "unknown"
+
+    async with _shared_channel_lock:
+        store = _shared_channel_load_store()
+        messages = store["messages"]
+        if parent_id:
+            parent_id = parent_id.strip()
+            if _shared_channel_message_index(messages, parent_id) < 0:
+                raise ValueError("reply_to_id not found")
+        now = datetime.now(CST)
+        message = {
+            "id": f"msg_{now.strftime('%Y%m%d_%H%M%S_%f')}_{random.randint(1000, 9999)}",
+            "parent_id": parent_id or None,
+            "sender": sender,
+            "content": content,
+            "tags": tag_list,
+            "created_at": now.isoformat(),
+            "visibility": SHARED_CHANNEL_VISIBILITY,
+            "source": source,
+        }
+        messages.append(message)
+        store["updated_at"] = now.isoformat()
+        _atomic_write_json(_shared_channel_messages_path(), store)
+        return message
+
+
+async def _shared_channel_ack_reader(reader: str, message_id: str = "") -> dict:
+    reader = _shared_channel_normalize_sender(reader, "reader")
+    async with _shared_channel_lock:
+        store = _shared_channel_load_store()
+        messages = [m for m in store.get("messages", []) if isinstance(m, dict)]
+        if not messages:
+            ack_id = ""
+        else:
+            ack_id = (message_id or "").strip() or messages[-1].get("id", "")
+            if ack_id and _shared_channel_message_index(messages, ack_id) < 0:
+                raise ValueError("message_id not found")
+        cursors = _shared_channel_load_cursors()
+        cursors[reader] = ack_id
+        _atomic_write_json(_shared_channel_cursors_path(), cursors)
+        unread = _shared_channel_unread_messages(store, cursors, reader)
+        return {
+            "status": "ok",
+            "reader": reader,
+            "acknowledged_message_id": ack_id,
+            "unread_count": len(unread),
+        }
 
 
 def _runtime_features_payload() -> dict:
@@ -826,8 +1127,20 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "evidence": "/api/runtime/learning-intake and runtime_learning_intake",
                 "why_it_matters": "External tutorials and debugging scars have a safe path into engineering experience.",
             },
+            {
+                "id": "shared_channel_v1",
+                "state": "landed",
+                "evidence": "/shared/channel/status plus shared_post/read/reply/unread/ack/status",
+                "why_it_matters": "Yechenyi and Guyanshen can share a technical living-room wall without merging their private rooms.",
+            },
         ],
         "open_items": [
+            {
+                "id": "guyanshen_shared_channel_connector",
+                "state": "planned",
+                "symptom": "Guyanshen still needs to connect to the shared channel protocol after his own hippocampus upgrade is stable.",
+                "safe_next_step": "Use the same MCP tools and sender=guyanshen; do not copy Yechenyi private memory into the shared wall.",
+            },
             {
                 "id": "project_workzone_write_timeout",
                 "state": "needs_debug",
@@ -1044,6 +1357,7 @@ def _runtime_diagnostics_payload() -> dict:
             "upstream_watch": "/api/runtime/upstream-watch",
             "upgrade_backlog": "/api/runtime/upgrade-backlog",
             "source_routes": "/api/runtime/source-routes",
+            "shared_channel_status": "/shared/channel/status",
         },
         "decision_tree": [
             "If diagnostics git_sha is old, deployment has not reached the running container yet.",
@@ -1606,6 +1920,138 @@ async def api_runtime_source_routes(request):
     from starlette.responses import JSONResponse
 
     return JSONResponse(_runtime_source_routes_payload())
+
+
+@mcp.custom_route("/shared/channel/status", methods=["GET"])
+async def api_shared_channel_status(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(_shared_channel_status_payload())
+
+
+@mcp.custom_route("/shared/channel/post", methods=["POST"])
+async def api_shared_channel_post(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+        message = await _shared_channel_post_message(
+            body.get("content", ""),
+            body.get("sender", ""),
+            tags=body.get("tags", []),
+            source=body.get("source", "http_shared_channel"),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.error(f"shared channel post failed: {e}")
+        return JSONResponse({"error": "shared channel post failed"}, status_code=500)
+    _mark_system_event("shared_channel_post")
+    return JSONResponse({"status": "ok", "message": message})
+
+
+@mcp.custom_route("/shared/channel/reply", methods=["POST"])
+async def api_shared_channel_reply(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+        message = await _shared_channel_post_message(
+            body.get("content", ""),
+            body.get("sender", ""),
+            tags=body.get("tags", []),
+            source=body.get("source", "http_shared_channel"),
+            parent_id=body.get("reply_to_id", ""),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.error(f"shared channel reply failed: {e}")
+        return JSONResponse({"error": "shared channel reply failed"}, status_code=500)
+    _mark_system_event("shared_channel_reply")
+    return JSONResponse({"status": "ok", "message": message})
+
+
+@mcp.custom_route("/shared/channel/read", methods=["GET", "POST"])
+async def api_shared_channel_read(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    body = {}
+    if request.method == "POST":
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+    try:
+        limit = int(body.get("limit", request.query_params.get("limit", 20)))
+    except Exception:
+        limit = 20
+    before = str(body.get("before", request.query_params.get("before", "")) or "")
+    store = _shared_channel_load_store()
+    messages = _shared_channel_visible_messages(store, limit=limit, before=before)
+    _mark_system_event("shared_channel_read")
+    return JSONResponse({"status": "ok", "messages": messages, "count": len(messages)})
+
+
+@mcp.custom_route("/shared/channel/unread", methods=["GET", "POST"])
+async def api_shared_channel_unread(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    body = {}
+    if request.method == "POST":
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+    try:
+        reader = _shared_channel_normalize_sender(
+            str(body.get("reader", request.query_params.get("reader", "")) or ""),
+            "reader",
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    store = _shared_channel_load_store()
+    cursors = _shared_channel_load_cursors()
+    unread = _shared_channel_unread_messages(store, cursors, reader)
+    _mark_system_event("shared_channel_unread")
+    return JSONResponse({
+        "status": "ok",
+        "reader": reader,
+        "unread_count": len(unread),
+        "messages": unread[-20:],
+    })
+
+
+@mcp.custom_route("/shared/channel/ack", methods=["POST"])
+async def api_shared_channel_ack(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        result = await _shared_channel_ack_reader(
+            str(body.get("reader", "") or ""),
+            str(body.get("message_id", "") or ""),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.error(f"shared channel ack failed: {e}")
+        return JSONResponse({"error": "shared channel ack failed"}, status_code=500)
+    _mark_system_event("shared_channel_ack")
+    return JSONResponse(result)
 
 
 # =============================================================
@@ -3965,6 +4411,91 @@ async def runtime_source_routes() -> str:
     """读取多平台来源字段约定，避免 ChatGPT/Codex/API/本地入口上下文串味。"""
     _mark_system_event("runtime_source_routes")
     return json.dumps(_runtime_source_routes_payload(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_status() -> str:
+    """读取叶辰一/顾砚深共享技术客厅状态；只读，不写主脑。"""
+    _mark_system_event("shared_status")
+    return json.dumps(_shared_channel_status_payload(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_post(
+    content: str,
+    sender: str,
+    tags: str = "",
+    source: str = "mcp_shared_channel",
+) -> str:
+    """向共享技术客厅发消息；sender 只允许 yechenyi/guyanshen/system。"""
+    try:
+        message = await _shared_channel_post_message(content, sender, tags=tags, source=source)
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_post")
+    return json.dumps({"status": "ok", "message": message}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_reply(
+    reply_to_id: str,
+    content: str,
+    sender: str,
+    tags: str = "",
+    source: str = "mcp_shared_channel",
+) -> str:
+    """回复共享技术客厅里的某条消息；不会写入任何一边主脑。"""
+    try:
+        message = await _shared_channel_post_message(
+            content,
+            sender,
+            tags=tags,
+            source=source,
+            parent_id=reply_to_id,
+        )
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_reply")
+    return json.dumps({"status": "ok", "message": message}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_read(limit: int = 20, before: str = "") -> str:
+    """读取共享技术客厅消息，支持 limit 和 before 游标；只读。"""
+    store = _shared_channel_load_store()
+    messages = _shared_channel_visible_messages(store, limit=limit, before=before)
+    _mark_system_event("shared_read")
+    return json.dumps({"status": "ok", "messages": messages, "count": len(messages)}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_unread(reader: str) -> str:
+    """读取某个 reader 的未读消息；reader 只允许 yechenyi/guyanshen/system。"""
+    try:
+        reader = _shared_channel_normalize_sender(reader, "reader")
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    store = _shared_channel_load_store()
+    cursors = _shared_channel_load_cursors()
+    unread = _shared_channel_unread_messages(store, cursors, reader)
+    _mark_system_event("shared_unread")
+    return json.dumps({
+        "status": "ok",
+        "reader": reader,
+        "unread_count": len(unread),
+        "messages": unread[-20:],
+    }, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_ack(reader: str, message_id: str = "") -> str:
+    """确认共享技术客厅已读位置；不传 message_id 时确认到最新消息。"""
+    try:
+        result = await _shared_channel_ack_reader(reader, message_id)
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_ack")
+    return json.dumps(result, ensure_ascii=False, indent=2)
 
 
 # =============================================================
