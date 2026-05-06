@@ -107,6 +107,7 @@ SHARED_SPACE_VERSION = "shared_space_v1"
 SHARED_TRAVEL_VERSION = "shared_travel_v1"
 SHARED_ROOM_SENSORY_VERSION = "shared_room_sensory_v1"
 SHARED_ROOM_ENVIRONMENT_VERSION = "shared_room_environment_v1"
+SHARED_ROOM_BRIEF_VERSION = "shared_room_brief_v1"
 SHARED_CHANNEL_MAX_CONTENT_CHARS = 4000
 SHARED_SPACE_MAX_CONTENT_CHARS = 8000
 SHARED_SPACE_ALLOWED_SECTIONS = ("tech_shelf", "house_rules", "shared_memory", "todo")
@@ -228,6 +229,8 @@ RUNTIME_FEATURES = {
     "shared_room_snapshot_mcp_tool": True,
     "shared_room_environment_http_endpoint": True,
     "shared_room_environment_mcp_tool": True,
+    "shared_room_brief_http_endpoint": True,
+    "shared_room_brief_mcp_tool": True,
     "shared_room_sensory_http_endpoints": True,
     "shared_room_sensory_mcp_tools": True,
     "shared_tech_card_http_endpoint": True,
@@ -283,6 +286,8 @@ RUNTIME_FEATURE_COMMITS = {
     "shared_room_snapshot_mcp_tool": "self",
     "shared_room_environment_http_endpoint": "self",
     "shared_room_environment_mcp_tool": "self",
+    "shared_room_brief_http_endpoint": "self",
+    "shared_room_brief_mcp_tool": "self",
     "shared_room_sensory_http_endpoints": "self",
     "shared_room_sensory_mcp_tools": "self",
     "shared_tech_card_http_endpoint": "self",
@@ -343,6 +348,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "shared_reply",
     "shared_room_snapshot",
     "shared_room_environment",
+    "shared_room_brief",
     "shared_room_display",
     "shared_room_place_object",
     "shared_room_sensory_status",
@@ -532,6 +538,10 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
     "shared_room_environment": {
         "required": [],
         "optional": [],
+    },
+    "shared_room_brief": {
+        "required": [],
+        "optional": ["wall_limit", "item_limit"],
     },
     "shared_room_display": {
         "required": [],
@@ -2483,6 +2493,104 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
     }
 
 
+def _shared_room_brief_payload(wall_limit: int = 5, item_limit: int = 5) -> dict:
+    wall_limit = max(1, min(int(wall_limit or 5), 20))
+    item_limit = max(1, min(int(item_limit or 5), 20))
+    channel_store = _shared_channel_load_store()
+    wall_messages = _shared_channel_visible_messages(channel_store, limit=wall_limit)
+    space_status = _shared_space_status_payload()
+    environment = _shared_room_environment_payload()
+    sensory = _shared_room_sensory_status_payload()
+    pet = _shared_pet_status_payload()
+    travel = _shared_travel_status_payload()
+    cabinet = _shared_travel_cabinet_payload(limit=item_limit)
+    display = _shared_room_display_payload(limit=item_limit)
+    isolation = _cadence_shared_runtime_isolation_payload()
+    latest_wall = wall_messages[-1] if wall_messages else {}
+    weather_current = environment.get("weather", {}).get("current", {})
+    return {
+        "status": "ok",
+        "version": SHARED_ROOM_BRIEF_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "read_only",
+        "main_brain_write": False,
+        "display_name": "月光玫瑰进门简报",
+        "canonical_base_url": SHARED_CHANNEL_CANONICAL_BASE_URL,
+        "canonical_mcp_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/mcp",
+        "generated_at": datetime.now(CST).isoformat(),
+        "summary": {
+            "day_phase": environment.get("day_phase", {}).get("label", ""),
+            "season": environment.get("season", {}).get("label", ""),
+            "weather": weather_current.get("weather_label", "未连接"),
+            "temperature_c": weather_current.get("temperature_c"),
+            "latest_wall_sender": latest_wall.get("sender", ""),
+            "latest_wall_excerpt": (latest_wall.get("content", "") or "")[:160],
+            "tech_shelf_count": space_status.get("section_counts", {}).get("tech_shelf", 0),
+            "house_rule_count": space_status.get("section_counts", {}).get("house_rules", 0),
+            "shared_memory_count": space_status.get("section_counts", {}).get("shared_memory", 0),
+            "todo_count": space_status.get("section_counts", {}).get("todo", 0),
+            "souvenir_count": travel.get("souvenir_count", 0),
+            "travelogue_count": travel.get("travelogue_count", 0),
+            "pet_adopted": bool(pet.get("adopted")),
+            "cadence_shared_runtime_protected": bool(isolation.get("protected")),
+        },
+        "environment": {
+            "time_source": environment.get("time_source", {}),
+            "day_phase": environment.get("day_phase", {}),
+            "season": environment.get("season", {}),
+            "weather": environment.get("weather", {}),
+            "atmosphere": environment.get("atmosphere", {}),
+        },
+        "technical_wall": {
+            "message_count": len([m for m in channel_store.get("messages", []) if isinstance(m, dict)]),
+            "recent_messages": wall_messages,
+        },
+        "shared_space": {
+            "section_counts": space_status.get("section_counts", {}),
+            "item_count": space_status.get("item_count", 0),
+        },
+        "room": {
+            "sensory_current": sensory.get("current", {}),
+            "display_zones": [
+                {
+                    "zone": zone.get("zone", ""),
+                    "label": zone.get("label", ""),
+                    "object_count": zone.get("object_count", 0),
+                }
+                for zone in display.get("zones", [])
+            ],
+        },
+        "pet": {
+            "adopted": pet.get("adopted", False),
+            "pet": pet.get("pet", {}),
+            "needs": pet.get("needs", {}),
+        },
+        "travel_cabinet": {
+            "shelves": [
+                {
+                    "traveler": shelf.get("traveler", ""),
+                    "label": shelf.get("label", ""),
+                    "object_count": shelf.get("object_count", 0),
+                    "travelogue_count": shelf.get("travelogue_count", 0),
+                    "places": shelf.get("places", []),
+                }
+                for shelf in cabinet.get("shelves", [])
+            ],
+        },
+        "safety": {
+            "auth_token_configured": bool(_shared_channel_auth_token()),
+            "cadence_shared_runtime_isolation": isolation,
+        },
+        "endpoints": {"brief": "/shared/room/brief"},
+        "mcp_tools": ["shared_room_brief"],
+        "boundaries": [
+            "The brief is read-only and aggregates existing shared-room state.",
+            "It does not write private memory and does not promote shared items into any private hippocampus.",
+            "Secrets, private intimate content, account identifiers, tokens, and credentials do not belong in the brief.",
+        ],
+    }
+
+
 async def _shared_channel_post_message(
     content: str,
     sender: str,
@@ -3011,6 +3119,12 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "why_it_matters": "The Moon Rose seaview room can expose real-time day phase, season, sea-window, and garden state for a future frontend.",
             },
             {
+                "id": "shared_room_brief_v1",
+                "state": "landed",
+                "evidence": "/shared/room/brief plus shared_room_brief",
+                "why_it_matters": "Daily and engineering windows can get one read-only doorway summary of weather, wall, shelf, pet, cabinet, and safety state.",
+            },
+            {
                 "id": "cadence_shared_runtime_isolation_v1",
                 "state": "landed",
                 "evidence": "/api/runtime/diagnostics and /api/cadence/status expose cadence_shared_runtime_isolation",
@@ -3246,6 +3360,7 @@ def _runtime_diagnostics_payload() -> dict:
             "shared_space_status": "/shared/space/status",
             "shared_room_snapshot": "/shared/room/snapshot",
             "shared_room_environment": "/shared/room/environment",
+            "shared_room_brief": "/shared/room/brief",
             "shared_room_display": "/shared/room/display",
             "shared_room_sensory_status": "/shared/room/sensory/status",
             "shared_pet_status": "/shared/pet/status",
@@ -4104,6 +4219,20 @@ async def api_shared_room_environment(request):
 
     _mark_system_event("shared_room_environment")
     return JSONResponse(_shared_room_environment_payload())
+
+
+@mcp.custom_route("/shared/room/brief", methods=["GET"])
+async def api_shared_room_brief(request):
+    from starlette.responses import JSONResponse
+
+    try:
+        wall_limit = int(request.query_params.get("wall_limit", 5))
+        item_limit = int(request.query_params.get("item_limit", 5))
+    except Exception:
+        wall_limit = 5
+        item_limit = 5
+    _mark_system_event("shared_room_brief")
+    return JSONResponse(_shared_room_brief_payload(wall_limit=wall_limit, item_limit=item_limit))
 
 
 @mcp.custom_route("/shared/room/display", methods=["GET"])
@@ -6947,6 +7076,17 @@ async def shared_room_environment() -> str:
     """读取月光玫瑰海景房真实时间驱动的天光、季节、落地窗海景和院子状态；只读。"""
     _mark_system_event("shared_room_environment")
     return json.dumps(_shared_room_environment_payload(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_room_brief(wall_limit: int = 5, item_limit: int = 5) -> str:
+    """读取月光玫瑰进门简报：天气、技术墙、书架、宠物、陈列柜和安全状态；只读。"""
+    _mark_system_event("shared_room_brief")
+    return json.dumps(
+        _shared_room_brief_payload(wall_limit=wall_limit, item_limit=item_limit),
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 @mcp.tool()
