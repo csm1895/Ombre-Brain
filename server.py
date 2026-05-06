@@ -255,6 +255,7 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "optional": ["limit"],
         "expected_output_fields": [
             "risk_flags",
+            "identity_metadata_status",
             "duplicate_candidate",
             "similarity_score",
             "duplicate_of",
@@ -1779,6 +1780,18 @@ def _join_csv_field(values: list[str] | None) -> str:
     return ",".join(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
 
 
+def _split_risk_flags(value: str) -> set[str]:
+    return {flag for flag in _split_csv_field(value) if flag and flag != "none"}
+
+
+def _review_level_for_risk_flags(risk_flags: set[str]) -> str:
+    if set(risk_flags) - {"duplicate_candidate"}:
+        return "blocked"
+    if "duplicate_candidate" in risk_flags:
+        return "duplicate"
+    return "normal"
+
+
 def _cadence_bucket_ids(buckets: list[dict]) -> list[str]:
     return [str(bucket.get("id", "")).strip() for bucket in buckets if str(bucket.get("id", "")).strip()]
 
@@ -1825,7 +1838,42 @@ def _diary_review_risk_flags(text: str) -> list[str]:
             if not any(marker_tail.startswith(identity) for identity in expected):
                 flags.append("identity_pov_conflict")
 
+    other_first_person_markers = (
+        "我是顾砚深",
+        "我是DeepSeek",
+        "我是Claude",
+        "我是ChatGPT",
+        "我作为顾砚深",
+        "我作为DeepSeek",
+        "我作为Claude",
+        "我作为ChatGPT",
+    )
+    if any(marker in compact for marker in other_first_person_markers):
+        flags.append("identity_pov_conflict")
+
     return sorted(set(flags))
+
+
+def _diary_review_identity_view_meta(text: str) -> dict[str, str]:
+    meta = _simple_frontmatter(text or "")
+    persisted_flags = _split_risk_flags(meta.get("risk_flags", ""))
+    computed_flags = set(_diary_review_risk_flags(text or ""))
+    risk_flags = persisted_flags | computed_flags
+    if "risk_flags" not in meta:
+        status = "computed"
+    elif computed_flags - persisted_flags:
+        status = "persisted_plus_computed"
+    else:
+        status = "persisted"
+    return {
+        "narrator": meta.get("narrator", "unknown"),
+        "brain_owner": meta.get("brain_owner", "unknown"),
+        "expected_narrator": DIARY_REVIEW_NARRATOR,
+        "expected_brain_owner": DIARY_REVIEW_BRAIN_OWNER,
+        "risk_flags": ",".join(sorted(risk_flags)) if risk_flags else "none",
+        "review_level": _review_level_for_risk_flags(risk_flags),
+        "identity_metadata_status": status,
+    }
 
 
 def _diary_review_similarity_text(text: str) -> str:
@@ -1901,23 +1949,19 @@ def _diary_review_duplicate_view_meta(text: str, review_id: str = "") -> dict[st
 
 
 def _diary_review_metadata(candidate_text: str, duplicate_meta: dict[str, str] | None = None) -> dict[str, str]:
-    risk_flags = _diary_review_risk_flags(candidate_text)
+    risk_flags = set(_diary_review_risk_flags(candidate_text))
     duplicate_meta = duplicate_meta or {}
     if duplicate_meta.get("duplicate_candidate") == "true":
-        risk_flags.append("duplicate_candidate")
-    risk_flags = sorted(set(risk_flags))
-    review_level = "normal"
-    if set(risk_flags) - {"duplicate_candidate"}:
-        review_level = "blocked"
-    elif "duplicate_candidate" in risk_flags:
-        review_level = "duplicate"
+        risk_flags.add("duplicate_candidate")
+    review_level = _review_level_for_risk_flags(risk_flags)
     return {
         "narrator": DIARY_REVIEW_NARRATOR,
         "brain_owner": DIARY_REVIEW_BRAIN_OWNER,
         "mentioned_entities": DIARY_REVIEW_MENTIONED_ENTITIES,
         "laid_entities": DIARY_REVIEW_LAID_ENTITIES,
-        "risk_flags": ",".join(risk_flags) if risk_flags else "none",
+        "risk_flags": ",".join(sorted(risk_flags)) if risk_flags else "none",
         "review_level": review_level,
+        "identity_metadata_status": "persisted",
         "duplicate_candidate": duplicate_meta.get("duplicate_candidate", "false"),
         "similarity_score": duplicate_meta.get("similarity_score", "0.00"),
         "duplicate_of": duplicate_meta.get("duplicate_of", "none"),
@@ -2032,6 +2076,7 @@ def _write_diary_review_candidate(
         f"coverage_bucket_ids: {_join_csv_field(coverage_bucket_ids or [])}",
         f"risk_flags: {review_meta['risk_flags']}",
         f"review_level: {review_meta['review_level']}",
+        f"identity_metadata_status: {review_meta['identity_metadata_status']}",
         f"duplicate_candidate: {review_meta['duplicate_candidate']}",
         f"similarity_score: {review_meta['similarity_score']}",
         f"duplicate_of: {review_meta['duplicate_of']}",
@@ -4105,15 +4150,19 @@ async def list_diary_reviews(limit: int = 10) -> str:
         except Exception:
             text = ""
         meta = _simple_frontmatter(text)
+        identity_meta = _diary_review_identity_view_meta(text)
         duplicate_meta = _diary_review_duplicate_view_meta(text, os.path.basename(path))
         body = text.split("---", 2)[2].strip() if text.startswith("---") and len(text.split("---", 2)) == 3 else text
         snippet = strip_wikilinks(body).replace("\n", " ").strip()[:220]
         rows.append(
             f"- review_id: {os.path.basename(path)}\n"
-            f"  narrator: {meta.get('narrator', 'unknown')}\n"
-            f"  brain_owner: {meta.get('brain_owner', 'unknown')}\n"
-            f"  review_level: {meta.get('review_level', 'unknown')}\n"
-            f"  risk_flags: {meta.get('risk_flags', 'unknown')}\n"
+            f"  narrator: {identity_meta.get('narrator', 'unknown')}\n"
+            f"  brain_owner: {identity_meta.get('brain_owner', 'unknown')}\n"
+            f"  expected_narrator: {identity_meta.get('expected_narrator', 'unknown')}\n"
+            f"  expected_brain_owner: {identity_meta.get('expected_brain_owner', 'unknown')}\n"
+            f"  review_level: {identity_meta.get('review_level', 'unknown')}\n"
+            f"  risk_flags: {identity_meta.get('risk_flags', 'unknown')}\n"
+            f"  identity_metadata_status: {identity_meta.get('identity_metadata_status', 'unknown')}\n"
             f"  duplicate_candidate: {duplicate_meta.get('duplicate_candidate', 'false')}\n"
             f"  similarity_score: {duplicate_meta.get('similarity_score', '0.00')}\n"
             f"  duplicate_of: {duplicate_meta.get('duplicate_of', 'none')}\n"
@@ -4139,6 +4188,7 @@ async def read_diary_review(review_id: str) -> str:
     try:
         text = _tail_text_file(source_path, 2000).strip()
         meta = _simple_frontmatter(text)
+        identity_meta = _diary_review_identity_view_meta(text)
         duplicate_meta = _diary_review_duplicate_view_meta(text, safe_id)
         body = _strip_frontmatter_text(text)
         return (
@@ -4149,10 +4199,13 @@ async def read_diary_review(review_id: str) -> str:
             "write_scope: read_only\n"
             "main_brain_write: false\n\n"
             "metadata:\n"
-            f"- narrator: {meta.get('narrator', 'unknown')}\n"
-            f"- brain_owner: {meta.get('brain_owner', 'unknown')}\n"
-            f"- review_level: {meta.get('review_level', 'unknown')}\n"
-            f"- risk_flags: {meta.get('risk_flags', 'unknown')}\n"
+            f"- narrator: {identity_meta.get('narrator', 'unknown')}\n"
+            f"- brain_owner: {identity_meta.get('brain_owner', 'unknown')}\n"
+            f"- expected_narrator: {identity_meta.get('expected_narrator', 'unknown')}\n"
+            f"- expected_brain_owner: {identity_meta.get('expected_brain_owner', 'unknown')}\n"
+            f"- review_level: {identity_meta.get('review_level', 'unknown')}\n"
+            f"- risk_flags: {identity_meta.get('risk_flags', 'unknown')}\n"
+            f"- identity_metadata_status: {identity_meta.get('identity_metadata_status', 'unknown')}\n"
             f"- duplicate_candidate: {duplicate_meta.get('duplicate_candidate', 'false')}\n"
             f"- similarity_score: {duplicate_meta.get('similarity_score', '0.00')}\n"
             f"- duplicate_of: {duplicate_meta.get('duplicate_of', 'none')}\n"
@@ -4178,9 +4231,9 @@ async def accept_diary_review(review_id: str) -> str:
         return f"未找到待验收候选: {safe_id}"
     try:
         text = _tail_text_file(source_path, 2000).strip()
-        meta = _simple_frontmatter(text)
-        risk_flags = meta.get("risk_flags", "")
-        review_level = meta.get("review_level", "")
+        identity_meta = _diary_review_identity_view_meta(text)
+        risk_flags = identity_meta.get("risk_flags", "")
+        review_level = identity_meta.get("review_level", "")
         if "identity_pov_conflict" in risk_flags or review_level == "blocked":
             return (
                 f"候选存在风险，已阻止收入: {safe_id}\n"
