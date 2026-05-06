@@ -168,6 +168,8 @@ RUNTIME_FEATURES = {
     "shared_space_mcp_tools": True,
     "shared_space_section_whitelist": True,
     "shared_space_atomic_json": True,
+    "shared_room_snapshot_http_endpoint": True,
+    "shared_room_snapshot_mcp_tool": True,
     "associated_memory_after_writes": True,
     "associated_memory_shows_provenance": True,
     "hold_provenance_defaults": True,
@@ -210,6 +212,8 @@ RUNTIME_FEATURE_COMMITS = {
     "shared_space_mcp_tools": "self",
     "shared_space_section_whitelist": "self",
     "shared_space_atomic_json": "self",
+    "shared_room_snapshot_http_endpoint": "self",
+    "shared_room_snapshot_mcp_tool": "self",
     "associated_memory_after_writes": "4d93255",
     "hold_provenance_defaults": "926b92d",
     "associated_memory_shows_provenance": "c4448c8",
@@ -259,6 +263,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "shared_post",
     "shared_read",
     "shared_reply",
+    "shared_room_snapshot",
     "shared_space_status",
     "shared_status",
     "shared_unread",
@@ -425,6 +430,10 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "required": [],
         "optional": ["section", "limit", "tag"],
         "section_whitelist": list(SHARED_SPACE_ALLOWED_SECTIONS),
+    },
+    "shared_room_snapshot": {
+        "required": [],
+        "optional": ["wall_limit", "item_limit"],
     },
 }
 RUNTIME_UPSTREAM_WATCH_ITEMS = [
@@ -857,6 +866,57 @@ def _shared_space_list_items(section: str = "", limit: int = 20, tag: str = "") 
         items = [item for item in items if normalized_tag in (item.get("tags") or [])]
     limit = max(1, min(int(limit or 20), 100))
     return items[-limit:]
+
+
+def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> dict:
+    wall_limit = max(1, min(int(wall_limit or 12), 50))
+    item_limit = max(1, min(int(item_limit or 8), 50))
+    channel_store = _shared_channel_load_store()
+    wall_messages = _shared_channel_visible_messages(channel_store, limit=wall_limit)
+    space_status = _shared_space_status_payload()
+    grouped_items = {
+        section: _shared_space_list_items(section=section, limit=item_limit)
+        for section in SHARED_SPACE_ALLOWED_SECTIONS
+    }
+    return {
+        "status": "ok",
+        "version": "shared_room_snapshot_v1",
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "read_only",
+        "main_brain_write": False,
+        "canonical_base_url": SHARED_CHANNEL_CANONICAL_BASE_URL,
+        "canonical_mcp_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/mcp",
+        "canonical_status_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/shared/room/snapshot",
+        "room_name": "mirror_living_room",
+        "display_name": "镜像客厅",
+        "frontend_hint": {
+            "left_nav": ["technical_wall", "tech_shelf", "house_rules", "shared_memory", "todo"],
+            "center": "selected section content",
+            "right": "presence and boundaries",
+            "bottom_input_modes": ["post_to_wall", "save_to_shelf", "mark_house_rule", "save_shared_memory", "add_todo"],
+        },
+        "presence": [
+            {"id": "qianqian", "name": "倩倩", "role": "human_owner", "can_write": True},
+            {"id": "yechenyi", "name": "叶辰一", "role": "ai_roommate", "can_write": True},
+            {"id": "guyanshen", "name": "顾砚深", "role": "ai_roommate", "can_write": True},
+        ],
+        "technical_wall": {
+            "message_count": len([m for m in channel_store.get("messages", []) if isinstance(m, dict)]),
+            "recent_messages": wall_messages,
+            "tools": ["shared_post", "shared_read", "shared_reply", "shared_unread", "shared_ack", "shared_status"],
+        },
+        "shared_space": {
+            "status": space_status,
+            "sections": grouped_items,
+            "tools": ["shared_space_status", "shared_item_add", "shared_item_list"],
+        },
+        "boundaries": [
+            "The living room is shared; private rooms remain separate.",
+            "Technical references, house rules, shared memory, and todo items can live here.",
+            "Private intimate content and secrets never belong here.",
+            "Items are not promoted to either private hippocampus without that side's explicit review or write flow.",
+        ],
+    }
 
 
 async def _shared_channel_post_message(
@@ -1325,6 +1385,12 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "evidence": "/shared/space/status plus shared_item_add/shared_item_list/shared_space_status",
                 "why_it_matters": "The living room now has a technical shelf, house rules, shared memory, and todo shelves for a future frontend.",
             },
+            {
+                "id": "shared_room_snapshot_v1",
+                "state": "landed",
+                "evidence": "/shared/room/snapshot and shared_room_snapshot",
+                "why_it_matters": "A future frontend can load the living room in one read-only call instead of stitching wall and shelf data itself.",
+            },
         ],
         "open_items": [
             {
@@ -1551,6 +1617,7 @@ def _runtime_diagnostics_payload() -> dict:
             "source_routes": "/api/runtime/source-routes",
             "shared_channel_status": "/shared/channel/status",
             "shared_space_status": "/shared/space/status",
+            "shared_room_snapshot": "/shared/room/snapshot",
         },
         "decision_tree": [
             "If diagnostics git_sha is old, deployment has not reached the running container yet.",
@@ -2302,6 +2369,20 @@ async def api_shared_space_items(request):
         return JSONResponse({"error": str(e)}, status_code=400)
     _mark_system_event("shared_space_item_list")
     return JSONResponse({"status": "ok", "items": items, "count": len(items)})
+
+
+@mcp.custom_route("/shared/room/snapshot", methods=["GET"])
+async def api_shared_room_snapshot(request):
+    from starlette.responses import JSONResponse
+
+    try:
+        wall_limit = int(request.query_params.get("wall_limit", 12))
+        item_limit = int(request.query_params.get("item_limit", 8))
+    except Exception:
+        wall_limit = 12
+        item_limit = 8
+    _mark_system_event("shared_room_snapshot")
+    return JSONResponse(_shared_room_snapshot_payload(wall_limit=wall_limit, item_limit=item_limit))
 
 
 # =============================================================
@@ -4810,6 +4891,17 @@ async def shared_item_list(section: str = "", limit: int = 20, tag: str = "") ->
         return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
     _mark_system_event("shared_item_list")
     return json.dumps({"status": "ok", "items": items, "count": len(items)}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_room_snapshot(wall_limit: int = 12, item_limit: int = 8) -> str:
+    """读取镜像客厅前端快照：技术墙、书架、家规、共享记忆、待办和在场者；只读。"""
+    _mark_system_event("shared_room_snapshot")
+    return json.dumps(
+        _shared_room_snapshot_payload(wall_limit=wall_limit, item_limit=item_limit),
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 # =============================================================
