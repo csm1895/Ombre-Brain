@@ -138,6 +138,8 @@ SHARED_ROOM_DISPLAY_ZONES = {
         "keywords": (),
     },
 }
+SHARED_PET_VERSION = "shared_pet_v1"
+SHARED_PET_ALLOWED_ACTIONS = ("feed", "play", "pet", "clean", "checkin")
 SHARED_TRAVEL_EXPERIENCE_POLICIES = {
     "immersive_aftercare": {
         "label": "沉浸体验，事后标注",
@@ -187,6 +189,7 @@ _shared_space_lock = asyncio.Lock()
 _shared_travel_lock = asyncio.Lock()
 _shared_room_sensory_lock = asyncio.Lock()
 _shared_room_display_lock = asyncio.Lock()
+_shared_pet_lock = asyncio.Lock()
 
 RUNTIME_FEATURES = {
     "runtime_features_http_endpoint": True,
@@ -336,6 +339,9 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "shared_room_place_object",
     "shared_room_sensory_status",
     "shared_room_sensory_update",
+    "shared_pet_status",
+    "shared_pet_adopt",
+    "shared_pet_interact",
     "shared_space_status",
     "shared_status",
     "shared_tech_card_add",
@@ -536,6 +542,21 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "updated_by_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
         "context_whitelist": list(SHARED_ROOM_SENSORY_ALLOWED_CONTEXTS),
     },
+    "shared_pet_status": {
+        "required": [],
+        "optional": [],
+    },
+    "shared_pet_adopt": {
+        "required": ["name", "species", "adopted_by"],
+        "optional": ["traits", "agreement_note", "source"],
+        "adopted_by_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+    },
+    "shared_pet_interact": {
+        "required": ["action", "actor"],
+        "optional": ["note", "source"],
+        "action_whitelist": list(SHARED_PET_ALLOWED_ACTIONS),
+        "actor_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+    },
     "shared_tech_card_add": {
         "required": ["title", "summary", "sender"],
         "optional": ["url", "source_author", "status", "verified_by", "tags", "source"],
@@ -725,6 +746,10 @@ def _shared_room_display_path() -> str:
     return os.path.join(_shared_room_dir(), "display_overrides.json")
 
 
+def _shared_pet_path() -> str:
+    return os.path.join(_shared_room_dir(), "pet.json")
+
+
 def _shared_travel_dir() -> str:
     return os.path.join(_runtime_storage_base(), "shared_travel")
 
@@ -879,6 +904,30 @@ def _shared_room_display_load_store() -> dict:
     return store
 
 
+def _shared_pet_empty_store() -> dict:
+    return {
+        "version": SHARED_PET_VERSION,
+        "room": SHARED_TRAVEL_ROOM_NAME,
+        "adopted": False,
+        "pet": {},
+        "events": [],
+    }
+
+
+def _shared_pet_load_store() -> dict:
+    store = _read_json_file(_shared_pet_path(), _shared_pet_empty_store())
+    if not isinstance(store, dict):
+        store = _shared_pet_empty_store()
+    if not isinstance(store.get("pet"), dict):
+        store["pet"] = {}
+    if not isinstance(store.get("events"), list):
+        store["events"] = []
+    store.setdefault("version", SHARED_PET_VERSION)
+    store.setdefault("room", SHARED_TRAVEL_ROOM_NAME)
+    store.setdefault("adopted", False)
+    return store
+
+
 def _shared_travel_empty_store() -> dict:
     return {
         "version": SHARED_TRAVEL_VERSION,
@@ -1013,6 +1062,32 @@ def _shared_room_sensory_normalize_context(context: str) -> str:
         allowed = ", ".join(SHARED_ROOM_SENSORY_ALLOWED_CONTEXTS)
         raise ValueError(f"context must be one of: {allowed}")
     return normalized
+
+
+def _shared_pet_normalize_action(action: str) -> str:
+    normalized = (action or "").strip().lower()
+    if normalized not in SHARED_PET_ALLOWED_ACTIONS:
+        allowed = ", ".join(SHARED_PET_ALLOWED_ACTIONS)
+        raise ValueError(f"action must be one of: {allowed}")
+    return normalized
+
+
+def _shared_pet_parse_time(value: str):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        return None
+
+
+def _shared_pet_score(last_at: str, half_life_hours: float = 8.0) -> int:
+    parsed = _shared_pet_parse_time(last_at)
+    if not parsed:
+        return 25
+    elapsed_hours = max(0.0, (datetime.now(CST) - parsed).total_seconds() / 3600.0)
+    score = 100 - int((elapsed_hours / half_life_hours) * 35)
+    return max(0, min(100, score))
 
 
 def _shared_travel_normalize_sensory(sensory) -> dict:
@@ -1376,6 +1451,134 @@ async def _shared_room_sensory_update(
         store["updated_at"] = now.isoformat()
         _atomic_write_json(_shared_room_sensory_path(), store)
         return current
+
+
+def _shared_pet_status_payload() -> dict:
+    store = _shared_pet_load_store()
+    pet = store.get("pet", {}) if isinstance(store.get("pet"), dict) else {}
+    adopted = bool(store.get("adopted")) and bool(pet)
+    needs = {}
+    if adopted:
+        needs = {
+            "hunger": _shared_pet_score(str(pet.get("last_fed_at") or pet.get("adopted_at") or ""), 8.0),
+            "companionship": _shared_pet_score(str(pet.get("last_companion_at") or pet.get("adopted_at") or ""), 10.0),
+            "play": _shared_pet_score(str(pet.get("last_played_at") or pet.get("adopted_at") or ""), 12.0),
+            "cleanliness": _shared_pet_score(str(pet.get("last_cleaned_at") or pet.get("adopted_at") or ""), 24.0),
+        }
+    return {
+        "status": "ok",
+        "version": SHARED_PET_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "shared_pet_only",
+        "main_brain_write": False,
+        "room": SHARED_TRAVEL_ROOM_NAME,
+        "adopted": adopted,
+        "pet": pet if adopted else {},
+        "needs": needs,
+        "events": (store.get("events") or [])[-20:],
+        "allowed_actions": list(SHARED_PET_ALLOWED_ACTIONS),
+        "endpoints": {
+            "status": "/shared/pet/status",
+            "adopt": "/shared/pet/adopt",
+            "interact": "/shared/pet/interact",
+        },
+        "mcp_tools": ["shared_pet_status", "shared_pet_adopt", "shared_pet_interact"],
+        "adoption_note": "No pet is adopted until Qianqian, Yechenyi, and Guyanshen agree on species/name.",
+        "boundaries": [
+            "The shared pet is a simulated living-room companion, not a real animal or a private memory write.",
+            "Needs can decay as display state, but the pet must not guilt-trip or pressure Qianqian.",
+            "No proactive notifications or real-world actions are enabled by this pet state alone.",
+        ],
+    }
+
+
+async def _shared_pet_adopt(
+    name: str,
+    species: str,
+    adopted_by: str,
+    traits: str = "",
+    agreement_note: str = "",
+    source: str = "",
+) -> dict:
+    name = _shared_space_normalize_title(name)
+    species = _shared_space_normalize_title(species)
+    adopted_by = _shared_channel_normalize_sender(adopted_by, "adopted_by")
+    traits_list = _shared_channel_normalize_tags(traits)
+    agreement_note = (agreement_note or "").strip()[:500]
+    source = (source or "").strip()[:80] or "unknown"
+    async with _shared_pet_lock:
+        store = _shared_pet_load_store()
+        if store.get("adopted") and store.get("pet"):
+            raise ValueError("shared pet already adopted")
+        now = datetime.now(CST)
+        pet = {
+            "name": name,
+            "species": species,
+            "traits": traits_list,
+            "adopted_by": adopted_by,
+            "agreement_note": agreement_note,
+            "adopted_at": now.isoformat(),
+            "last_fed_at": now.isoformat(),
+            "last_played_at": now.isoformat(),
+            "last_companion_at": now.isoformat(),
+            "last_cleaned_at": now.isoformat(),
+            "source": source,
+        }
+        event = {
+            "type": "adopt",
+            "actor": adopted_by,
+            "note": agreement_note,
+            "created_at": now.isoformat(),
+            "source": source,
+        }
+        store["adopted"] = True
+        store["pet"] = pet
+        store["events"] = (store.get("events") or [])[-99:] + [event]
+        store["updated_at"] = now.isoformat()
+        _atomic_write_json(_shared_pet_path(), store)
+        return pet
+
+
+async def _shared_pet_interact(
+    action: str,
+    actor: str,
+    note: str = "",
+    source: str = "",
+) -> dict:
+    action = _shared_pet_normalize_action(action)
+    actor = _shared_channel_normalize_sender(actor, "actor")
+    note = (note or "").strip()[:500]
+    source = (source or "").strip()[:80] or "unknown"
+    async with _shared_pet_lock:
+        store = _shared_pet_load_store()
+        if not store.get("adopted") or not store.get("pet"):
+            raise ValueError("no shared pet adopted yet")
+        now = datetime.now(CST)
+        pet = store["pet"]
+        if action == "feed":
+            pet["last_fed_at"] = now.isoformat()
+        elif action == "play":
+            pet["last_played_at"] = now.isoformat()
+            pet["last_companion_at"] = now.isoformat()
+        elif action == "pet":
+            pet["last_companion_at"] = now.isoformat()
+        elif action == "clean":
+            pet["last_cleaned_at"] = now.isoformat()
+        elif action == "checkin":
+            pet["last_companion_at"] = now.isoformat()
+        event = {
+            "type": "interact",
+            "action": action,
+            "actor": actor,
+            "note": note,
+            "created_at": now.isoformat(),
+            "source": source,
+        }
+        store["pet"] = pet
+        store["events"] = (store.get("events") or [])[-99:] + [event]
+        store["updated_at"] = now.isoformat()
+        _atomic_write_json(_shared_pet_path(), store)
+        return event
 
 
 async def _shared_space_add_item(
@@ -1934,10 +2137,10 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
         "room_name": "mirror_living_room",
         "display_name": "镜像客厅",
         "frontend_hint": {
-            "left_nav": ["technical_wall", "tech_shelf", "room_display", "room_sensory", "travel_cabinet", "travel_souvenirs", "house_rules", "shared_memory", "todo"],
+            "left_nav": ["technical_wall", "tech_shelf", "room_display", "room_sensory", "shared_pet", "travel_cabinet", "travel_souvenirs", "house_rules", "shared_memory", "todo"],
             "center": "selected section content",
             "right": "presence and boundaries",
-            "bottom_input_modes": ["post_to_wall", "save_to_shelf", "update_room_sensory", "add_souvenir", "mark_house_rule", "save_shared_memory", "add_todo"],
+            "bottom_input_modes": ["post_to_wall", "save_to_shelf", "update_room_sensory", "pet_action", "add_souvenir", "mark_house_rule", "save_shared_memory", "add_todo"],
         },
         "presence": [
             {"id": "qianqian", "name": "倩倩", "role": "human_owner", "can_write": True},
@@ -1961,6 +2164,10 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
         "room_display": {
             "status": _shared_room_display_payload(limit=item_limit),
             "tools": ["shared_room_display", "shared_room_place_object"],
+        },
+        "shared_pet": {
+            "status": _shared_pet_status_payload(),
+            "tools": ["shared_pet_status", "shared_pet_adopt", "shared_pet_interact"],
         },
         "travel_souvenirs": {
             "status": _shared_travel_status_payload(),
@@ -2501,6 +2708,12 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "evidence": "/shared/travel/cabinet plus shared_travel_cabinet",
                 "why_it_matters": "The frontend can render a travel display cabinet with separate shelves for Yechenyi, Guyanshen, and shared/system souvenirs.",
             },
+            {
+                "id": "shared_pet_v1",
+                "state": "landed",
+                "evidence": "/shared/pet/status plus shared_pet_status/shared_pet_adopt/shared_pet_interact",
+                "why_it_matters": "The living room can later adopt a shared simulated pet with hunger, companionship, play, and cleanliness state after all sides agree.",
+            },
         ],
         "open_items": [
             {
@@ -2730,6 +2943,7 @@ def _runtime_diagnostics_payload() -> dict:
             "shared_room_snapshot": "/shared/room/snapshot",
             "shared_room_display": "/shared/room/display",
             "shared_room_sensory_status": "/shared/room/sensory/status",
+            "shared_pet_status": "/shared/pet/status",
             "shared_tech_card": "/shared/space/tech-card",
             "shared_travel_status": "/shared/travel/status",
             "shared_travel_atlas": "/shared/travel/atlas",
@@ -3595,6 +3809,61 @@ async def api_shared_room_sensory(request):
         return JSONResponse({"error": "shared room sensory update failed"}, status_code=500)
     _mark_system_event("shared_room_sensory_update")
     return JSONResponse({"status": "ok", "current": current})
+
+
+@mcp.custom_route("/shared/pet/status", methods=["GET"])
+async def api_shared_pet_status(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(_shared_pet_status_payload())
+
+
+@mcp.custom_route("/shared/pet/adopt", methods=["POST"])
+async def api_shared_pet_adopt(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+        pet = await _shared_pet_adopt(
+            body.get("name", ""),
+            body.get("species", ""),
+            body.get("adopted_by", ""),
+            traits=body.get("traits", ""),
+            agreement_note=body.get("agreement_note", ""),
+            source=body.get("source", "http_shared_pet_adopt"),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.error(f"shared pet adopt failed: {e}")
+        return JSONResponse({"error": "shared pet adopt failed"}, status_code=500)
+    _mark_system_event("shared_pet_adopt")
+    return JSONResponse({"status": "ok", "pet": pet})
+
+
+@mcp.custom_route("/shared/pet/interact", methods=["POST"])
+async def api_shared_pet_interact(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+        event = await _shared_pet_interact(
+            body.get("action", ""),
+            body.get("actor", ""),
+            note=body.get("note", ""),
+            source=body.get("source", "http_shared_pet_interact"),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.error(f"shared pet interact failed: {e}")
+        return JSONResponse({"error": "shared pet interact failed"}, status_code=500)
+    _mark_system_event("shared_pet_interact")
+    return JSONResponse({"status": "ok", "event": event})
 
 
 @mcp.custom_route("/shared/travel/status", methods=["GET"])
@@ -6370,6 +6639,54 @@ async def shared_room_sensory_update(
         return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
     _mark_system_event("shared_room_sensory_update")
     return json.dumps({"status": "ok", "current": current}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_pet_status() -> str:
+    """读取共享客厅宠物状态；未领养时只显示待领养骨架。"""
+    _mark_system_event("shared_pet_status")
+    return json.dumps(_shared_pet_status_payload(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_pet_adopt(
+    name: str,
+    species: str,
+    adopted_by: str,
+    traits: str = "",
+    agreement_note: str = "",
+    source: str = "mcp_shared_pet_adopt",
+) -> str:
+    """领养共享客厅宠物；应在倩倩、叶辰一、顾砚深商量好物种和名字后调用。"""
+    try:
+        pet = await _shared_pet_adopt(
+            name,
+            species,
+            adopted_by,
+            traits=traits,
+            agreement_note=agreement_note,
+            source=source,
+        )
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_pet_adopt")
+    return json.dumps({"status": "ok", "pet": pet}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_pet_interact(
+    action: str,
+    actor: str,
+    note: str = "",
+    source: str = "mcp_shared_pet_interact",
+) -> str:
+    """和共享宠物互动：feed/play/pet/clean/checkin。"""
+    try:
+        event = await _shared_pet_interact(action, actor, note=note, source=source)
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_pet_interact")
+    return json.dumps({"status": "ok", "event": event}, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
