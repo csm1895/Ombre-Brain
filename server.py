@@ -712,6 +712,7 @@ def _runtime_life_window_check_payload() -> dict:
 
 
 def _runtime_learning_intake_payload() -> dict:
+    owner = DIARY_REVIEW_BRAIN_OWNER or "configured brain owner"
     return {
         "status": "ok",
         "features_version": RUNTIME_FEATURES_VERSION,
@@ -720,7 +721,7 @@ def _runtime_learning_intake_payload() -> dict:
         "main_brain_write": False,
         "purpose": (
             "Describe how external tutorials, open-source projects, blog notes, "
-            "deployment attempts, and debugging scars become Yechenyi engineering experience."
+            f"deployment attempts, and debugging scars become {owner} engineering experience."
         ),
         "reference_drop_folder": "/Users/yangyang/Desktop/收藏教程",
         "primary_memory_lane": "engineering_workzone",
@@ -756,7 +757,7 @@ def _runtime_learning_intake_payload() -> dict:
             "P0luz/Ombre-Brain upstream watch for phase 2 anchor/pin/feel/decay changes.",
             "xiaowo-release style memory/perception references: event templates, generative recall, room clock, sensory channels.",
             "月光玫瑰 Tencent Cloud migration path: learn gradually before Zeabur credit runs out.",
-            "Cross-window collision notes from Yechenyi and Gu Yanshen engineering lanes.",
+            "Cross-window collision notes from shared OmbreBrain engineering lanes.",
         ],
         "what_gets_remembered": [
             "Verified commands, endpoints, field names, commits, and deployment behavior.",
@@ -768,7 +769,7 @@ def _runtime_learning_intake_payload() -> dict:
             "Unverified blog claims.",
             "Large external architecture rewrites.",
             "Secrets, tokens, IP addresses, passwords, cookies, billing/account identifiers.",
-            "Other AI identities as Yechenyi narrator or brain owner.",
+            f"Other AI identities as {owner} narrator or brain owner.",
         ],
         "safe_next_actions": [
             "Use write_project_workzone_update for short engineering learning notes.",
@@ -780,6 +781,7 @@ def _runtime_learning_intake_payload() -> dict:
 
 
 def _runtime_upgrade_backlog_payload() -> dict:
+    owner = DIARY_REVIEW_BRAIN_OWNER or "configured brain owner"
     return {
         "status": "ok",
         "features_version": RUNTIME_FEATURES_VERSION,
@@ -804,7 +806,7 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "id": "identity_pov_guard",
                 "state": "landed",
                 "evidence": "diary review reads and accepts compute identity_metadata_status and risk_flags.",
-                "why_it_matters": "Other model names or narrator takeovers do not silently become Yechenyi memory.",
+                "why_it_matters": f"Other model names or narrator takeovers do not silently become {owner} memory.",
             },
             {
                 "id": "diary_review_health",
