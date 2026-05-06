@@ -107,6 +107,7 @@ SHARED_SPACE_VERSION = "shared_space_v1"
 SHARED_CHANNEL_MAX_CONTENT_CHARS = 4000
 SHARED_SPACE_MAX_CONTENT_CHARS = 8000
 SHARED_SPACE_ALLOWED_SECTIONS = ("tech_shelf", "house_rules", "shared_memory", "todo")
+SHARED_TECH_CARD_ALLOWED_STATUSES = ("unverified", "reading", "tested", "adopted", "rejected")
 SHARED_CHANNEL_CANONICAL_BASE_URL = os.environ.get(
     "OMBRE_SHARED_CHANNEL_CANONICAL_BASE_URL",
     "https://yechenyi.zeabur.app",
@@ -170,6 +171,9 @@ RUNTIME_FEATURES = {
     "shared_space_atomic_json": True,
     "shared_room_snapshot_http_endpoint": True,
     "shared_room_snapshot_mcp_tool": True,
+    "shared_tech_card_http_endpoint": True,
+    "shared_tech_card_mcp_tool": True,
+    "shared_tech_card_status_whitelist": True,
     "associated_memory_after_writes": True,
     "associated_memory_shows_provenance": True,
     "hold_provenance_defaults": True,
@@ -214,6 +218,9 @@ RUNTIME_FEATURE_COMMITS = {
     "shared_space_atomic_json": "self",
     "shared_room_snapshot_http_endpoint": "self",
     "shared_room_snapshot_mcp_tool": "self",
+    "shared_tech_card_http_endpoint": "self",
+    "shared_tech_card_mcp_tool": "self",
+    "shared_tech_card_status_whitelist": "self",
     "associated_memory_after_writes": "4d93255",
     "hold_provenance_defaults": "926b92d",
     "associated_memory_shows_provenance": "c4448c8",
@@ -266,6 +273,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "shared_room_snapshot",
     "shared_space_status",
     "shared_status",
+    "shared_tech_card_add",
     "shared_unread",
     "startup_bridge",
     "trace",
@@ -434,6 +442,12 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
     "shared_room_snapshot": {
         "required": [],
         "optional": ["wall_limit", "item_limit"],
+    },
+    "shared_tech_card_add": {
+        "required": ["title", "summary", "sender"],
+        "optional": ["url", "source_author", "status", "verified_by", "tags", "source"],
+        "sender_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+        "status_whitelist": list(SHARED_TECH_CARD_ALLOWED_STATUSES),
     },
 }
 RUNTIME_UPSTREAM_WATCH_ITEMS = [
@@ -686,6 +700,22 @@ def _shared_space_normalize_title(title: str) -> str:
     return normalized[:120]
 
 
+def _shared_tech_card_normalize_status(status: str) -> str:
+    normalized = (status or "unverified").strip().lower()
+    if normalized not in SHARED_TECH_CARD_ALLOWED_STATUSES:
+        allowed = ", ".join(SHARED_TECH_CARD_ALLOWED_STATUSES)
+        raise ValueError(f"status must be one of: {allowed}")
+    return normalized
+
+
+def _shared_tech_card_normalize_url(url: str) -> str:
+    normalized = (url or "").strip()
+    if not normalized:
+        return ""
+    # Keep the stable page URL but drop query/fragment data that may carry tokens or tracking.
+    return normalized.split("?", 1)[0].split("#", 1)[0][:500]
+
+
 def _shared_channel_normalize_tags(tags) -> list[str]:
     if tags is None:
         return []
@@ -810,8 +840,9 @@ def _shared_space_status_payload() -> dict:
             "status": "/shared/space/status",
             "add_item": "/shared/space/item",
             "list_items": "/shared/space/items",
+            "add_tech_card": "/shared/space/tech-card",
         },
-        "mcp_tools": ["shared_space_status", "shared_item_add", "shared_item_list"],
+        "mcp_tools": ["shared_space_status", "shared_item_add", "shared_item_list", "shared_tech_card_add"],
         "boundaries": [
             "Shared space items do not automatically write to any private hippocampus.",
             "Do not store private intimate content, secrets, tokens, passwords, cookies, billing, or account identifiers.",
@@ -827,6 +858,7 @@ async def _shared_space_add_item(
     sender: str,
     tags=None,
     source: str = "",
+    extra_fields: dict | None = None,
 ) -> dict:
     section = _shared_space_normalize_section(section)
     sender = _shared_channel_normalize_sender(sender)
@@ -849,10 +881,48 @@ async def _shared_space_add_item(
             "visibility": "shared_room",
             "source": source,
         }
+        if extra_fields:
+            item.update(extra_fields)
         store["items"].append(item)
         store["updated_at"] = now.isoformat()
         _atomic_write_json(_shared_space_items_path(), store)
         return item
+
+
+async def _shared_tech_card_add(
+    title: str,
+    summary: str,
+    sender: str,
+    url: str = "",
+    source_author: str = "",
+    status: str = "unverified",
+    verified_by: str = "",
+    tags=None,
+    source: str = "",
+) -> dict:
+    status = _shared_tech_card_normalize_status(status)
+    verified_by = (verified_by or "").strip().lower()
+    if verified_by:
+        verified_by = _shared_channel_normalize_sender(verified_by, "verified_by")
+    normalized_tags = _shared_channel_normalize_tags(tags)
+    normalized_tags = list(dict.fromkeys(normalized_tags + ["tech_card", status]))
+    extra_fields = {
+        "card_type": "tech_reference",
+        "url": _shared_tech_card_normalize_url(url),
+        "source_author": (source_author or "").strip()[:120],
+        "summary": _shared_space_normalize_content(summary),
+        "status": status,
+        "verified_by": verified_by,
+    }
+    return await _shared_space_add_item(
+        "tech_shelf",
+        title,
+        summary,
+        sender,
+        tags=normalized_tags,
+        source=source or "tech_card",
+        extra_fields=extra_fields,
+    )
 
 
 def _shared_space_list_items(section: str = "", limit: int = 20, tag: str = "") -> list[dict]:
@@ -908,7 +978,7 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
         "shared_space": {
             "status": space_status,
             "sections": grouped_items,
-            "tools": ["shared_space_status", "shared_item_add", "shared_item_list"],
+            "tools": ["shared_space_status", "shared_item_add", "shared_item_list", "shared_tech_card_add"],
         },
         "boundaries": [
             "The living room is shared; private rooms remain separate.",
@@ -1391,6 +1461,12 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "evidence": "/shared/room/snapshot and shared_room_snapshot",
                 "why_it_matters": "A future frontend can load the living room in one read-only call instead of stitching wall and shelf data itself.",
             },
+            {
+                "id": "tech_shelf_card_v2",
+                "state": "landed",
+                "evidence": "/shared/space/tech-card and shared_tech_card_add",
+                "why_it_matters": "Tutorials, posts, and open-source notes can enter the shared shelf as structured cards with source and verification status.",
+            },
         ],
         "open_items": [
             {
@@ -1618,6 +1694,7 @@ def _runtime_diagnostics_payload() -> dict:
             "shared_channel_status": "/shared/channel/status",
             "shared_space_status": "/shared/space/status",
             "shared_room_snapshot": "/shared/room/snapshot",
+            "shared_tech_card": "/shared/space/tech-card",
         },
         "decision_tree": [
             "If diagnostics git_sha is old, deployment has not reached the running container yet.",
@@ -2369,6 +2446,34 @@ async def api_shared_space_items(request):
         return JSONResponse({"error": str(e)}, status_code=400)
     _mark_system_event("shared_space_item_list")
     return JSONResponse({"status": "ok", "items": items, "count": len(items)})
+
+
+@mcp.custom_route("/shared/space/tech-card", methods=["POST"])
+async def api_shared_space_tech_card(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+        item = await _shared_tech_card_add(
+            body.get("title", ""),
+            body.get("summary", body.get("content", "")),
+            body.get("sender", ""),
+            url=body.get("url", ""),
+            source_author=body.get("source_author", ""),
+            status=body.get("status", "unverified"),
+            verified_by=body.get("verified_by", ""),
+            tags=body.get("tags", []),
+            source=body.get("source", "http_shared_tech_card"),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.error(f"shared tech card add failed: {e}")
+        return JSONResponse({"error": "shared tech card add failed"}, status_code=500)
+    _mark_system_event("shared_tech_card_add")
+    return JSONResponse({"status": "ok", "item": item})
 
 
 @mcp.custom_route("/shared/room/snapshot", methods=["GET"])
@@ -4891,6 +4996,37 @@ async def shared_item_list(section: str = "", limit: int = 20, tag: str = "") ->
         return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
     _mark_system_event("shared_item_list")
     return json.dumps({"status": "ok", "items": items, "count": len(items)}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_tech_card_add(
+    title: str,
+    summary: str,
+    sender: str,
+    url: str = "",
+    source_author: str = "",
+    status: str = "unverified",
+    verified_by: str = "",
+    tags: str = "",
+    source: str = "mcp_shared_tech_card",
+) -> str:
+    """向技术书架添加资料卡；带来源、URL、验证状态和验证者。"""
+    try:
+        item = await _shared_tech_card_add(
+            title,
+            summary,
+            sender,
+            url=url,
+            source_author=source_author,
+            status=status,
+            verified_by=verified_by,
+            tags=tags,
+            source=source,
+        )
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_tech_card_add")
+    return json.dumps({"status": "ok", "item": item}, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
