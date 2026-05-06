@@ -243,6 +243,7 @@ RUNTIME_FEATURES = {
     "bucket_metadata_provenance_persistence": True,
     "diary_review_duplicate_metadata_persistence": True,
     "cadence_draft_runtime_persistence": True,
+    "cadence_shared_runtime_isolation": True,
     "diary_review_duplicate_detection": True,
 }
 RUNTIME_FEATURES_VERSION = "2026-05-06.source-routes-v1"
@@ -295,6 +296,7 @@ RUNTIME_FEATURE_COMMITS = {
     "associated_memory_shows_provenance": "c4448c8",
     "grow_provenance_defaults": "7c32ed6",
     "bucket_metadata_provenance_persistence": "c662017",
+    "cadence_shared_runtime_isolation": "self",
 }
 RUNTIME_EXPECTED_MCP_TOOLS = [
     "accept_diary_review",
@@ -2554,6 +2556,7 @@ def _runtime_features_payload() -> dict:
             "cadence_draft_dir": CADENCE_DRAFT_DIR,
             "cadence_receipt_dir": CADENCE_RECEIPT_DIR,
             "cadence_draft_only": True,
+            "cadence_shared_runtime_isolation": _cadence_shared_runtime_isolation_payload(),
         },
         "schema_notes": {
             "grow_optional_source_fields": "server_supported; connector_schema_may_lag",
@@ -3007,6 +3010,12 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "evidence": "/shared/room/environment plus shared_room_environment",
                 "why_it_matters": "The Moon Rose seaview room can expose real-time day phase, season, sea-window, and garden state for a future frontend.",
             },
+            {
+                "id": "cadence_shared_runtime_isolation_v1",
+                "state": "landed",
+                "evidence": "/api/runtime/diagnostics and /api/cadence/status expose cadence_shared_runtime_isolation",
+                "why_it_matters": "Night cadence and DeepSeek draft cleanup are explicitly guarded away from shared living-room JSON stores.",
+            },
         ],
         "open_items": [
             {
@@ -3217,7 +3226,9 @@ def _runtime_diagnostics_payload() -> dict:
             "critical_life_window_tool_count": len(manifest["critical_life_window_tools"]),
             "runtime_dir": features["storage"]["runtime_dir"],
             "cadence_draft_only": features["storage"]["cadence_draft_only"],
+            "cadence_shared_runtime_protected": features["storage"]["cadence_shared_runtime_isolation"]["protected"],
         },
+        "cadence_shared_runtime_isolation": features["storage"]["cadence_shared_runtime_isolation"],
         "critical_life_window_tools": manifest["critical_life_window_tools"],
         "endpoints": {
             "features": "/api/runtime/features",
@@ -3300,6 +3311,56 @@ TAIL_CONTEXT_DIR = os.environ.get(
     "OMBRE_TAIL_CONTEXT_DIR",
     os.path.join(RUNTIME_STORAGE_DIR, "tail_context"),
 )
+
+
+def _path_nested_under(child: str, parent: str) -> bool:
+    try:
+        child_abs = os.path.abspath(child)
+        parent_abs = os.path.abspath(parent)
+        return os.path.commonpath([child_abs, parent_abs]) == parent_abs
+    except Exception:
+        return False
+
+
+def _cadence_shared_runtime_isolation_payload() -> dict:
+    shared_dirs = {
+        "shared_channel": _shared_channel_dir(),
+        "shared_space": _shared_space_dir(),
+        "shared_room": _shared_room_dir(),
+        "shared_travel": _shared_travel_dir(),
+    }
+    cadence_write_dirs = {
+        "drafts": CADENCE_DRAFT_DIR,
+        "receipts": CADENCE_RECEIPT_DIR,
+        "dreams": CADENCE_DREAM_DIR,
+        "diary_review": CADENCE_REVIEW_DIR,
+        "deepseek_attribution_receipts": DEEPSEEK_ATTRIBUTION_DIR,
+    }
+    overlaps = []
+    for cadence_name, cadence_dir in cadence_write_dirs.items():
+        for shared_name, shared_dir in shared_dirs.items():
+            if _path_nested_under(cadence_dir, shared_dir) or _path_nested_under(shared_dir, cadence_dir):
+                overlaps.append({
+                    "cadence_dir": cadence_name,
+                    "shared_dir": shared_name,
+                    "cadence_path": cadence_dir,
+                    "shared_path": shared_dir,
+                })
+    return {
+        "protected": not overlaps,
+        "read_scope": "bucket_manager_memory_summaries_only",
+        "write_scope": "cadence_drafts_receipts_reviews_dreams_only",
+        "main_brain_write": False,
+        "shared_runtime_write": False,
+        "shared_dirs": shared_dirs,
+        "cadence_write_dirs": cadence_write_dirs,
+        "overlaps": overlaps,
+        "policy": [
+            "Cadence and DeepSeek may draft candidates, receipts, reviews, dreams, and logs.",
+            "Cadence must not write shared_channel, shared_space, shared_room, shared_travel, or shared_pet JSON stores.",
+            "Shared room state is changed only by shared_* tools and endpoints.",
+        ],
+    }
 TAIL_CONTEXT_PATH = os.environ.get(
     "OMBRE_TAIL_CONTEXT_PATH",
     os.path.join(TAIL_CONTEXT_DIR, "latest_tail_context.md"),
@@ -8351,6 +8412,7 @@ async def api_cadence_status(request):
         "latest_receipt": _read_latest_cadence_receipt_summary(),
         "draft_only": True,
         "main_brain_write": False,
+        "shared_runtime_isolation": _cadence_shared_runtime_isolation_payload(),
     })
 
 
