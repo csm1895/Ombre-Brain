@@ -131,6 +131,8 @@ RUNTIME_FEATURES = {
     "runtime_diary_review_health_mcp_tool": True,
     "runtime_life_window_check_http_endpoint": True,
     "runtime_life_window_check_mcp_tool": True,
+    "runtime_learning_intake_http_endpoint": True,
+    "runtime_learning_intake_mcp_tool": True,
     "runtime_upstream_watch_http_endpoint": True,
     "runtime_upstream_watch_mcp_tool": True,
     "runtime_source_routes_http_endpoint": True,
@@ -160,6 +162,8 @@ RUNTIME_FEATURE_COMMITS = {
     "runtime_diary_review_health_mcp_tool": "self",
     "runtime_life_window_check_http_endpoint": "self",
     "runtime_life_window_check_mcp_tool": "self",
+    "runtime_learning_intake_http_endpoint": "self",
+    "runtime_learning_intake_mcp_tool": "self",
     "runtime_upstream_watch_http_endpoint": "self",
     "runtime_upstream_watch_mcp_tool": "self",
     "runtime_source_routes_http_endpoint": "self",
@@ -194,6 +198,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "runtime_diary_review_health",
     "runtime_diagnostics",
     "runtime_features",
+    "runtime_learning_intake",
     "runtime_life_window_check",
     "runtime_schema_expectations",
     "runtime_source_routes",
@@ -306,6 +311,10 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "optional": [],
     },
     "runtime_life_window_check": {
+        "required": [],
+        "optional": [],
+    },
+    "runtime_learning_intake": {
         "required": [],
         "optional": [],
     },
@@ -693,6 +702,74 @@ def _runtime_life_window_check_payload() -> dict:
     }
 
 
+def _runtime_learning_intake_payload() -> dict:
+    return {
+        "status": "ok",
+        "features_version": RUNTIME_FEATURES_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "read_only",
+        "main_brain_write": False,
+        "purpose": (
+            "Describe how external tutorials, open-source projects, blog notes, "
+            "deployment attempts, and debugging scars become Yechenyi engineering experience."
+        ),
+        "reference_drop_folder": "/Users/yangyang/Desktop/收藏教程",
+        "primary_memory_lane": "engineering_workzone",
+        "learning_pipeline": [
+            {
+                "stage": "reference_intake",
+                "meaning": "Read tutorials or projects as external reference. Do not treat them as local truth yet.",
+                "write_target": "engineering_workzone or local _docs intake notes",
+            },
+            {
+                "stage": "comparison",
+                "meaning": "Compare the idea against current OmbreBrain behavior, runtime endpoints, connector schema, and local constraints.",
+                "write_target": "engineering_workzone",
+            },
+            {
+                "stage": "small_experiment",
+                "meaning": "Try a narrow patch or local experiment with explicit verification and rollback boundaries.",
+                "write_target": "git commit plus engineering_workzone result",
+            },
+            {
+                "stage": "verified_experience",
+                "meaning": "Record what actually worked, what failed, and what should be reused next time.",
+                "write_target": "engineering_workzone; promote to stable docs only after repeated usefulness",
+            },
+            {
+                "stage": "stable_pattern",
+                "meaning": "A lesson becomes part of default engineering judgment only after live validation or repeated local proof.",
+                "write_target": "runtime diagnostics/docs/roadmap when useful",
+            },
+        ],
+        "current_reference_streams": [
+            "Desktop 收藏教程 folder for tutorials and saved OCR notes.",
+            "P0luz/Ombre-Brain upstream watch for phase 2 anchor/pin/feel/decay changes.",
+            "xiaowo-release style memory/perception references: event templates, generative recall, room clock, sensory channels.",
+            "月光玫瑰 Tencent Cloud migration path: learn gradually before Zeabur credit runs out.",
+            "Cross-window collision notes from Yechenyi and Gu Yanshen engineering lanes.",
+        ],
+        "what_gets_remembered": [
+            "Verified commands, endpoints, field names, commits, and deployment behavior.",
+            "Failure modes such as connector schema lag, Zeabur delayed deploys, dirty worktrees, and cross-window main-branch collisions.",
+            "Design rules that survived practice, not just attractive tutorial claims.",
+            "Boundaries: no secrets, no account storage inspection, no automatic implementation from reference material.",
+        ],
+        "what_does_not_get_promoted_directly": [
+            "Unverified blog claims.",
+            "Large external architecture rewrites.",
+            "Secrets, tokens, IP addresses, passwords, cookies, billing/account identifiers.",
+            "Other AI identities as Yechenyi narrator or brain owner.",
+        ],
+        "safe_next_actions": [
+            "Use write_project_workzone_update for short engineering learning notes.",
+            "Use _docs intake notes for longer local tutorial summaries.",
+            "Use runtime diagnostics and live endpoints as acceptance evidence.",
+            "Keep reference reading separate from implementation until a narrow patch is chosen.",
+        ],
+    }
+
+
 def _parse_observed_tools(observed_tools: str) -> list[str]:
     raw = (observed_tools or "").strip()
     if not raw:
@@ -857,6 +934,7 @@ def _runtime_diagnostics_payload() -> dict:
             "diagnostics": "/api/runtime/diagnostics",
             "connector_check": "/api/runtime/connector-check",
             "diary_review_health": "/api/runtime/diary-review-health",
+            "learning_intake": "/api/runtime/learning-intake",
             "life_window_check": "/api/runtime/life-window-check",
             "upstream_watch": "/api/runtime/upstream-watch",
             "source_routes": "/api/runtime/source-routes",
@@ -1394,6 +1472,13 @@ async def api_runtime_life_window_check(request):
     from starlette.responses import JSONResponse
 
     return JSONResponse(_runtime_life_window_check_payload())
+
+
+@mcp.custom_route("/api/runtime/learning-intake", methods=["GET"])
+async def api_runtime_learning_intake(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(_runtime_learning_intake_payload())
 
 
 @mcp.custom_route("/api/runtime/upstream-watch", methods=["GET"])
@@ -3739,6 +3824,13 @@ async def runtime_life_window_check() -> str:
     """生活窗一键预检：工具、schema、来源路由、diary_review 队列，只读。"""
     _mark_system_event("runtime_life_window_check")
     return json.dumps(_runtime_life_window_check_payload(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def runtime_learning_intake() -> str:
+    """读取外部教程/开源项目/踩坑经验如何进入工程记忆的路线图；只读。"""
+    _mark_system_event("runtime_learning_intake")
+    return json.dumps(_runtime_learning_intake_payload(), ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
