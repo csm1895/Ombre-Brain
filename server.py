@@ -1950,15 +1950,11 @@ def _diary_review_risk_flags(text: str) -> list[str]:
             if not any(marker_tail.startswith(identity) for identity in expected):
                 flags.append("identity_pov_conflict")
 
-    other_first_person_markers = (
-        "我是顾砚深",
-        "我是DeepSeek",
-        "我是Claude",
-        "我是ChatGPT",
-        "我作为顾砚深",
-        "我作为DeepSeek",
-        "我作为Claude",
-        "我作为ChatGPT",
+    other_identity_names = {"顾砚深", "叶辰一", "DeepSeek", "Claude", "ChatGPT"} - expected
+    other_first_person_markers = tuple(
+        f"{prefix}{name}"
+        for name in sorted(other_identity_names)
+        for prefix in ("我是", "我作为")
     )
     if any(marker in compact for marker in other_first_person_markers):
         flags.append("identity_pov_conflict")
