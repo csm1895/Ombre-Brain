@@ -108,6 +108,7 @@ SHARED_TRAVEL_VERSION = "shared_travel_v1"
 SHARED_ROOM_SENSORY_VERSION = "shared_room_sensory_v1"
 SHARED_ROOM_ENVIRONMENT_VERSION = "shared_room_environment_v1"
 SHARED_ROOM_BRIEF_VERSION = "shared_room_brief_v1"
+SHARED_ROOM_SEARCH_VERSION = "shared_room_search_v1"
 SHARED_CHANNEL_MAX_CONTENT_CHARS = 4000
 SHARED_SPACE_MAX_CONTENT_CHARS = 8000
 SHARED_SPACE_ALLOWED_SECTIONS = ("tech_shelf", "house_rules", "shared_memory", "todo")
@@ -231,6 +232,8 @@ RUNTIME_FEATURES = {
     "shared_room_environment_mcp_tool": True,
     "shared_room_brief_http_endpoint": True,
     "shared_room_brief_mcp_tool": True,
+    "shared_room_search_http_endpoint": True,
+    "shared_room_search_mcp_tool": True,
     "shared_room_sensory_http_endpoints": True,
     "shared_room_sensory_mcp_tools": True,
     "shared_tech_card_http_endpoint": True,
@@ -288,6 +291,8 @@ RUNTIME_FEATURE_COMMITS = {
     "shared_room_environment_mcp_tool": "self",
     "shared_room_brief_http_endpoint": "self",
     "shared_room_brief_mcp_tool": "self",
+    "shared_room_search_http_endpoint": "self",
+    "shared_room_search_mcp_tool": "self",
     "shared_room_sensory_http_endpoints": "self",
     "shared_room_sensory_mcp_tools": "self",
     "shared_tech_card_http_endpoint": "self",
@@ -349,6 +354,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "shared_room_snapshot",
     "shared_room_environment",
     "shared_room_brief",
+    "shared_room_search",
     "shared_room_display",
     "shared_room_place_object",
     "shared_room_sensory_status",
@@ -542,6 +548,11 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
     "shared_room_brief": {
         "required": [],
         "optional": ["wall_limit", "item_limit"],
+    },
+    "shared_room_search": {
+        "required": ["query"],
+        "optional": ["limit", "scope"],
+        "scope_whitelist": ["all", "wall", "space", "travel"],
     },
     "shared_room_display": {
         "required": [],
@@ -2591,6 +2602,101 @@ def _shared_room_brief_payload(wall_limit: int = 5, item_limit: int = 5) -> dict
     }
 
 
+def _shared_room_search_text(value) -> str:
+    if isinstance(value, dict):
+        return " ".join(_shared_room_search_text(v) for v in value.values())
+    if isinstance(value, list):
+        return " ".join(_shared_room_search_text(v) for v in value)
+    return str(value or "")
+
+
+def _shared_room_search_entry(kind: str, item: dict, query: str) -> dict | None:
+    haystack = _shared_room_search_text(item)
+    if query.lower() not in haystack.lower():
+        return None
+    score = haystack.lower().count(query.lower())
+    if not score:
+        score = 1
+    return {
+        "kind": kind,
+        "score": score,
+        "id": item.get("id", ""),
+        "title": item.get("title", "") or item.get("content", "")[:60],
+        "sender": item.get("sender", "") or item.get("traveler", ""),
+        "section": item.get("section", ""),
+        "place": item.get("place", ""),
+        "created_at": item.get("created_at", ""),
+        "source": item.get("source", ""),
+        "tags": item.get("tags", []),
+        "excerpt": haystack[:260],
+    }
+
+
+def _shared_room_search_payload(query: str, limit: int = 20, scope: str = "all") -> dict:
+    query = (query or "").strip()
+    if not query:
+        raise ValueError("query is required")
+    limit = max(1, min(int(limit or 20), 50))
+    scope = (scope or "all").strip().lower()
+    if scope not in ("all", "wall", "space", "travel"):
+        raise ValueError("scope must be one of: all, wall, space, travel")
+
+    results = []
+    if scope in ("all", "wall"):
+        channel_store = _shared_channel_load_store()
+        for message in channel_store.get("messages", []):
+            if isinstance(message, dict):
+                entry = _shared_room_search_entry("technical_wall_message", message, query)
+                if entry:
+                    results.append(entry)
+
+    if scope in ("all", "space"):
+        space_store = _shared_space_load_store()
+        for item in space_store.get("items", []):
+            if isinstance(item, dict):
+                entry = _shared_room_search_entry("shared_space_item", item, query)
+                if entry:
+                    results.append(entry)
+
+    if scope in ("all", "travel"):
+        travel_store = _shared_travel_load_store()
+        for souvenir in travel_store.get("souvenirs", []):
+            if isinstance(souvenir, dict):
+                entry = _shared_room_search_entry("travel_souvenir", souvenir, query)
+                if entry:
+                    results.append(entry)
+        for travelogue in travel_store.get("travelogues", []):
+            if isinstance(travelogue, dict):
+                entry = _shared_room_search_entry("travelogue", travelogue, query)
+                if entry:
+                    results.append(entry)
+
+    results.sort(key=lambda item: (item.get("score", 0), item.get("created_at", "")), reverse=True)
+    return {
+        "status": "ok",
+        "version": SHARED_ROOM_SEARCH_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "read_only",
+        "main_brain_write": False,
+        "query": query,
+        "scope": scope,
+        "result_count": len(results),
+        "results": results[:limit],
+        "searched_sources": {
+            "wall": scope in ("all", "wall"),
+            "space": scope in ("all", "space"),
+            "travel": scope in ("all", "travel"),
+        },
+        "endpoints": {"search": "/shared/room/search"},
+        "mcp_tools": ["shared_room_search"],
+        "boundaries": [
+            "Search is read-only and only scans shared living-room stores.",
+            "It does not search private hippocampus buckets, account data, logs, secrets, or raw filesystem paths.",
+            "Search results do not promote anything into private memory.",
+        ],
+    }
+
+
 async def _shared_channel_post_message(
     content: str,
     sender: str,
@@ -3125,6 +3231,12 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "why_it_matters": "Daily and engineering windows can get one read-only doorway summary of weather, wall, shelf, pet, cabinet, and safety state.",
             },
             {
+                "id": "shared_room_search_v1",
+                "state": "landed",
+                "evidence": "/shared/room/search plus shared_room_search",
+                "why_it_matters": "Growing wall, shelf, and travel records can be found from one shared-room search without touching private hippocampus memory.",
+            },
+            {
                 "id": "cadence_shared_runtime_isolation_v1",
                 "state": "landed",
                 "evidence": "/api/runtime/diagnostics and /api/cadence/status expose cadence_shared_runtime_isolation",
@@ -3361,6 +3473,7 @@ def _runtime_diagnostics_payload() -> dict:
             "shared_room_snapshot": "/shared/room/snapshot",
             "shared_room_environment": "/shared/room/environment",
             "shared_room_brief": "/shared/room/brief",
+            "shared_room_search": "/shared/room/search",
             "shared_room_display": "/shared/room/display",
             "shared_room_sensory_status": "/shared/room/sensory/status",
             "shared_pet_status": "/shared/pet/status",
@@ -4233,6 +4346,27 @@ async def api_shared_room_brief(request):
         item_limit = 5
     _mark_system_event("shared_room_brief")
     return JSONResponse(_shared_room_brief_payload(wall_limit=wall_limit, item_limit=item_limit))
+
+
+@mcp.custom_route("/shared/room/search", methods=["GET", "POST"])
+async def api_shared_room_search(request):
+    from starlette.responses import JSONResponse
+
+    body = {}
+    if request.method == "POST":
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+    try:
+        query = str(body.get("query", request.query_params.get("query", "")) or "")
+        limit = int(body.get("limit", request.query_params.get("limit", 20)))
+        scope = str(body.get("scope", request.query_params.get("scope", "all")) or "all")
+        payload = _shared_room_search_payload(query=query, limit=limit, scope=scope)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    _mark_system_event("shared_room_search")
+    return JSONResponse(payload)
 
 
 @mcp.custom_route("/shared/room/display", methods=["GET"])
@@ -7087,6 +7221,17 @@ async def shared_room_brief(wall_limit: int = 5, item_limit: int = 5) -> str:
         ensure_ascii=False,
         indent=2,
     )
+
+
+@mcp.tool()
+async def shared_room_search(query: str, limit: int = 20, scope: str = "all") -> str:
+    """搜索共享客厅：技术墙、书架/家规/共享记忆/待办、旅行纪念品和游记；只读。"""
+    try:
+        payload = _shared_room_search_payload(query=query, limit=limit, scope=scope)
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_room_search")
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
