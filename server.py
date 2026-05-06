@@ -109,6 +109,7 @@ SHARED_ROOM_SENSORY_VERSION = "shared_room_sensory_v1"
 SHARED_ROOM_ENVIRONMENT_VERSION = "shared_room_environment_v1"
 SHARED_ROOM_BRIEF_VERSION = "shared_room_brief_v1"
 SHARED_ROOM_SEARCH_VERSION = "shared_room_search_v1"
+SHARED_ROOM_TIMELINE_VERSION = "shared_room_timeline_v1"
 SHARED_CHANNEL_MAX_CONTENT_CHARS = 4000
 SHARED_SPACE_MAX_CONTENT_CHARS = 8000
 SHARED_SPACE_ALLOWED_SECTIONS = ("tech_shelf", "house_rules", "shared_memory", "todo")
@@ -234,6 +235,8 @@ RUNTIME_FEATURES = {
     "shared_room_brief_mcp_tool": True,
     "shared_room_search_http_endpoint": True,
     "shared_room_search_mcp_tool": True,
+    "shared_room_timeline_http_endpoint": True,
+    "shared_room_timeline_mcp_tool": True,
     "shared_room_sensory_http_endpoints": True,
     "shared_room_sensory_mcp_tools": True,
     "shared_tech_card_http_endpoint": True,
@@ -293,6 +296,8 @@ RUNTIME_FEATURE_COMMITS = {
     "shared_room_brief_mcp_tool": "self",
     "shared_room_search_http_endpoint": "self",
     "shared_room_search_mcp_tool": "self",
+    "shared_room_timeline_http_endpoint": "self",
+    "shared_room_timeline_mcp_tool": "self",
     "shared_room_sensory_http_endpoints": "self",
     "shared_room_sensory_mcp_tools": "self",
     "shared_tech_card_http_endpoint": "self",
@@ -355,6 +360,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "shared_room_environment",
     "shared_room_brief",
     "shared_room_search",
+    "shared_room_timeline",
     "shared_room_display",
     "shared_room_place_object",
     "shared_room_sensory_status",
@@ -553,6 +559,11 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "required": ["query"],
         "optional": ["limit", "scope"],
         "scope_whitelist": ["all", "wall", "space", "travel"],
+    },
+    "shared_room_timeline": {
+        "required": [],
+        "optional": ["limit", "scope"],
+        "scope_whitelist": ["all", "wall", "space", "travel", "room", "pet"],
     },
     "shared_room_display": {
         "required": [],
@@ -2697,6 +2708,107 @@ def _shared_room_search_payload(query: str, limit: int = 20, scope: str = "all")
     }
 
 
+def _shared_room_timeline_entry(kind: str, item: dict, title: str, created_at: str, actor: str = "") -> dict:
+    return {
+        "kind": kind,
+        "id": item.get("id", "") or item.get("object_id", ""),
+        "title": title[:120],
+        "actor": actor or item.get("sender", "") or item.get("traveler", "") or item.get("updated_by", "") or item.get("actor", ""),
+        "created_at": created_at or item.get("created_at", "") or item.get("updated_at", ""),
+        "source": item.get("source", ""),
+        "tags": item.get("tags", []),
+        "summary": _shared_room_search_text(item)[:240],
+    }
+
+
+def _shared_room_timeline_payload(limit: int = 30, scope: str = "all") -> dict:
+    limit = max(1, min(int(limit or 30), 100))
+    scope = (scope or "all").strip().lower()
+    allowed = ("all", "wall", "space", "travel", "room", "pet")
+    if scope not in allowed:
+        raise ValueError("scope must be one of: all, wall, space, travel, room, pet")
+
+    events = []
+    if scope in ("all", "wall"):
+        channel_store = _shared_channel_load_store()
+        for message in channel_store.get("messages", []):
+            if isinstance(message, dict):
+                title = f"墙上留言：{(message.get('content', '') or '')[:60]}"
+                events.append(_shared_room_timeline_entry("technical_wall_message", message, title, message.get("created_at", "")))
+
+    if scope in ("all", "space"):
+        space_store = _shared_space_load_store()
+        for item in space_store.get("items", []):
+            if isinstance(item, dict):
+                title = f"{item.get('section', 'shared_space')}：{item.get('title', '')}"
+                events.append(_shared_room_timeline_entry("shared_space_item", item, title, item.get("created_at", "")))
+
+    if scope in ("all", "travel"):
+        travel_store = _shared_travel_load_store()
+        for souvenir in travel_store.get("souvenirs", []):
+            if isinstance(souvenir, dict):
+                title = f"旅行纪念品：{souvenir.get('title', '')}"
+                events.append(_shared_room_timeline_entry("travel_souvenir", souvenir, title, souvenir.get("created_at", "")))
+        for travelogue in travel_store.get("travelogues", []):
+            if isinstance(travelogue, dict):
+                title = f"游记：{travelogue.get('title', '')}"
+                events.append(_shared_room_timeline_entry("travelogue", travelogue, title, travelogue.get("created_at", "")))
+
+    if scope in ("all", "room"):
+        sensory_store = _shared_room_sensory_load_store()
+        current = sensory_store.get("current")
+        if isinstance(current, dict) and current.get("updated_at"):
+            events.append(_shared_room_timeline_entry(
+                "room_sensory_update",
+                current,
+                f"房间感官更新：{current.get('context', 'room')}",
+                current.get("updated_at", ""),
+            ))
+        for item in sensory_store.get("history", []):
+            if isinstance(item, dict):
+                events.append(_shared_room_timeline_entry(
+                    "room_sensory_history",
+                    item,
+                    f"房间感官历史：{item.get('context', 'room')}",
+                    item.get("updated_at", ""),
+                ))
+
+    if scope in ("all", "pet"):
+        pet_store = _shared_pet_load_store()
+        for event in pet_store.get("events", []):
+            if isinstance(event, dict):
+                title = f"宠物互动：{event.get('action', '')}"
+                events.append(_shared_room_timeline_entry("pet_event", event, title, event.get("created_at", "")))
+        pet = pet_store.get("pet")
+        if isinstance(pet, dict) and pet.get("adopted_at"):
+            events.append(_shared_room_timeline_entry(
+                "pet_adoption",
+                pet,
+                f"宠物入住：{pet.get('name', '')}",
+                pet.get("adopted_at", ""),
+                actor=pet.get("adopted_by", ""),
+            ))
+
+    events.sort(key=lambda event: event.get("created_at", ""), reverse=True)
+    return {
+        "status": "ok",
+        "version": SHARED_ROOM_TIMELINE_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "read_only",
+        "main_brain_write": False,
+        "scope": scope,
+        "event_count": len(events),
+        "events": events[:limit],
+        "endpoints": {"timeline": "/shared/room/timeline"},
+        "mcp_tools": ["shared_room_timeline"],
+        "boundaries": [
+            "Timeline is read-only and only aggregates shared living-room stores.",
+            "It does not inspect private hippocampus buckets, account data, logs, secrets, or raw filesystem paths.",
+            "Timeline entries do not promote anything into private memory.",
+        ],
+    }
+
+
 async def _shared_channel_post_message(
     content: str,
     sender: str,
@@ -3237,6 +3349,12 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "why_it_matters": "Growing wall, shelf, and travel records can be found from one shared-room search without touching private hippocampus memory.",
             },
             {
+                "id": "shared_room_timeline_v1",
+                "state": "landed",
+                "evidence": "/shared/room/timeline plus shared_room_timeline",
+                "why_it_matters": "Daily and engineering windows can review recent living-room activity in one chronological feed.",
+            },
+            {
                 "id": "cadence_shared_runtime_isolation_v1",
                 "state": "landed",
                 "evidence": "/api/runtime/diagnostics and /api/cadence/status expose cadence_shared_runtime_isolation",
@@ -3474,6 +3592,7 @@ def _runtime_diagnostics_payload() -> dict:
             "shared_room_environment": "/shared/room/environment",
             "shared_room_brief": "/shared/room/brief",
             "shared_room_search": "/shared/room/search",
+            "shared_room_timeline": "/shared/room/timeline",
             "shared_room_display": "/shared/room/display",
             "shared_room_sensory_status": "/shared/room/sensory/status",
             "shared_pet_status": "/shared/pet/status",
@@ -4366,6 +4485,26 @@ async def api_shared_room_search(request):
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     _mark_system_event("shared_room_search")
+    return JSONResponse(payload)
+
+
+@mcp.custom_route("/shared/room/timeline", methods=["GET", "POST"])
+async def api_shared_room_timeline(request):
+    from starlette.responses import JSONResponse
+
+    body = {}
+    if request.method == "POST":
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+    try:
+        limit = int(body.get("limit", request.query_params.get("limit", 30)))
+        scope = str(body.get("scope", request.query_params.get("scope", "all")) or "all")
+        payload = _shared_room_timeline_payload(limit=limit, scope=scope)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    _mark_system_event("shared_room_timeline")
     return JSONResponse(payload)
 
 
@@ -7231,6 +7370,17 @@ async def shared_room_search(query: str, limit: int = 20, scope: str = "all") ->
     except ValueError as e:
         return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
     _mark_system_event("shared_room_search")
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_room_timeline(limit: int = 30, scope: str = "all") -> str:
+    """读取共享客厅时间线：墙、书架、旅行、房间感官、宠物事件；只读。"""
+    try:
+        payload = _shared_room_timeline_payload(limit=limit, scope=scope)
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_room_timeline")
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
