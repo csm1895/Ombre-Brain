@@ -182,6 +182,7 @@ _shared_channel_lock = asyncio.Lock()
 _shared_space_lock = asyncio.Lock()
 _shared_travel_lock = asyncio.Lock()
 _shared_room_sensory_lock = asyncio.Lock()
+_shared_room_display_lock = asyncio.Lock()
 
 RUNTIME_FEATURES = {
     "runtime_features_http_endpoint": True,
@@ -328,6 +329,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "shared_reply",
     "shared_room_snapshot",
     "shared_room_display",
+    "shared_room_place_object",
     "shared_room_sensory_status",
     "shared_room_sensory_update",
     "shared_space_status",
@@ -512,6 +514,12 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "required": [],
         "optional": ["limit"],
         "zones": list(SHARED_ROOM_DISPLAY_ZONES.keys()),
+    },
+    "shared_room_place_object": {
+        "required": ["object_id", "zone", "placed_by"],
+        "optional": ["note", "source"],
+        "placed_by_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+        "zone_whitelist": list(SHARED_ROOM_DISPLAY_ZONES.keys()),
     },
     "shared_room_sensory_status": {
         "required": [],
@@ -703,6 +711,10 @@ def _shared_room_sensory_path() -> str:
     return os.path.join(_shared_room_dir(), "sensory.json")
 
 
+def _shared_room_display_path() -> str:
+    return os.path.join(_shared_room_dir(), "display_overrides.json")
+
+
 def _shared_travel_dir() -> str:
     return os.path.join(_runtime_storage_base(), "shared_travel")
 
@@ -837,6 +849,26 @@ def _shared_room_sensory_load_store() -> dict:
     return store
 
 
+def _shared_room_display_empty_store() -> dict:
+    return {
+        "version": "shared_room_display_overrides_v1",
+        "room": SHARED_TRAVEL_ROOM_NAME,
+        "placements": {},
+    }
+
+
+def _shared_room_display_load_store() -> dict:
+    store = _read_json_file(_shared_room_display_path(), _shared_room_display_empty_store())
+    if not isinstance(store, dict):
+        store = _shared_room_display_empty_store()
+    placements = store.get("placements")
+    if not isinstance(placements, dict):
+        store["placements"] = {}
+    store.setdefault("version", "shared_room_display_overrides_v1")
+    store.setdefault("room", SHARED_TRAVEL_ROOM_NAME)
+    return store
+
+
 def _shared_travel_empty_store() -> dict:
     return {
         "version": SHARED_TRAVEL_VERSION,
@@ -955,6 +987,14 @@ def _shared_room_display_zone_for_place(place: str) -> str:
             if keyword.lower() in text:
                 return zone
     return "living_room"
+
+
+def _shared_room_display_normalize_zone(zone: str) -> str:
+    normalized = (zone or "").strip().lower()
+    if normalized not in SHARED_ROOM_DISPLAY_ZONES:
+        allowed = ", ".join(SHARED_ROOM_DISPLAY_ZONES.keys())
+        raise ValueError(f"zone must be one of: {allowed}")
+    return normalized
 
 
 def _shared_room_sensory_normalize_context(context: str) -> str:
@@ -1625,6 +1665,8 @@ def _shared_travel_atlas_payload(limit: int = 50, traveler: str = "", tag: str =
 def _shared_room_display_payload(limit: int = 50) -> dict:
     limit = max(1, min(int(limit or 50), 100))
     store = _shared_travel_load_store()
+    display_store = _shared_room_display_load_store()
+    placements = display_store.get("placements", {}) if isinstance(display_store.get("placements"), dict) else {}
     souvenirs = [item for item in store.get("souvenirs", []) if isinstance(item, dict)][-limit:]
     travelogues = [item for item in store.get("travelogues", []) if isinstance(item, dict)][-limit:]
     travelogue_by_souvenir: dict[str, list[str]] = {}
@@ -1646,8 +1688,11 @@ def _shared_room_display_payload(limit: int = 50) -> dict:
     }
     for souvenir in souvenirs:
         place = str(souvenir.get("place") or "")
-        zone = _shared_room_display_zone_for_place(place)
         souvenir_id = str(souvenir.get("id") or "")
+        placement = placements.get(souvenir_id, {}) if souvenir_id else {}
+        zone = placement.get("zone") if isinstance(placement, dict) else ""
+        if zone not in SHARED_ROOM_DISPLAY_ZONES:
+            zone = _shared_room_display_zone_for_place(place)
         zones[zone]["objects"].append({
             "id": souvenir_id,
             "type": "souvenir",
@@ -1658,6 +1703,7 @@ def _shared_room_display_payload(limit: int = 50) -> dict:
             "experience_mode": souvenir.get("experience_mode", ""),
             "experience_policy": _shared_travel_item_policy(souvenir),
             "travelogue_ids": travelogue_by_souvenir.get(souvenir_id, []),
+            "placement": placement if isinstance(placement, dict) else {},
             "created_at": souvenir.get("created_at", ""),
         })
 
@@ -1676,14 +1722,55 @@ def _shared_room_display_payload(limit: int = 50) -> dict:
         "room": SHARED_TRAVEL_ROOM_NAME,
         "display_name": "月光玫瑰海景房客厅",
         "zones": normalized_zones,
+        "placement_count": len(placements),
         "current_sensory": current_sensory if isinstance(current_sensory, dict) else {},
-        "endpoints": {"display": "/shared/room/display"},
-        "mcp_tools": ["shared_room_display"],
+        "endpoints": {
+            "display": "/shared/room/display",
+            "place_object": "/shared/room/place",
+        },
+        "mcp_tools": ["shared_room_display", "shared_room_place_object"],
         "boundaries": [
             "Room display is frontend layout data derived from shared travel objects.",
             "Display entries do not write or promote private hippocampus memory.",
         ],
     }
+
+
+async def _shared_room_place_object(
+    object_id: str,
+    zone: str,
+    placed_by: str,
+    note: str = "",
+    source: str = "",
+) -> dict:
+    object_id = (object_id or "").strip()
+    if not object_id:
+        raise ValueError("object_id is required")
+    zone = _shared_room_display_normalize_zone(zone)
+    placed_by = _shared_channel_normalize_sender(placed_by, "placed_by")
+    note = (note or "").strip()[:300]
+    source = (source or "").strip()[:80] or "unknown"
+    store = _shared_travel_load_store()
+    souvenirs = [item for item in store.get("souvenirs", []) if isinstance(item, dict)]
+    if not any(str(item.get("id") or "") == object_id for item in souvenirs):
+        raise ValueError("object_id does not match a known shared travel souvenir")
+
+    async with _shared_room_display_lock:
+        display_store = _shared_room_display_load_store()
+        now = datetime.now(CST)
+        placement = {
+            "object_id": object_id,
+            "zone": zone,
+            "zone_label": SHARED_ROOM_DISPLAY_ZONES[zone].get("label", zone),
+            "placed_by": placed_by,
+            "note": note,
+            "updated_at": now.isoformat(),
+            "source": source,
+        }
+        display_store["placements"][object_id] = placement
+        display_store["updated_at"] = now.isoformat()
+        _atomic_write_json(_shared_room_display_path(), display_store)
+        return placement
 
 
 def _shared_space_list_items(section: str = "", limit: int = 20, tag: str = "") -> list[dict]:
@@ -1747,7 +1834,7 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
         },
         "room_display": {
             "status": _shared_room_display_payload(limit=item_limit),
-            "tools": ["shared_room_display"],
+            "tools": ["shared_room_display", "shared_room_place_object"],
         },
         "travel_souvenirs": {
             "status": _shared_travel_status_payload(),
@@ -2277,8 +2364,8 @@ def _runtime_upgrade_backlog_payload() -> dict:
             {
                 "id": "shared_room_display_v1",
                 "state": "landed",
-                "evidence": "/shared/room/display plus shared_room_display",
-                "why_it_matters": "The frontend can render Moon Rose room zones and place souvenirs in areas like the window sill instead of showing only raw lists.",
+                "evidence": "/shared/room/display plus shared_room_display/shared_room_place_object",
+                "why_it_matters": "The frontend can render Moon Rose room zones and manually place souvenirs in areas like the window sill or coffee table instead of showing only raw lists.",
             },
         ],
         "open_items": [
@@ -3317,6 +3404,30 @@ async def api_shared_room_display(request):
         limit = 50
     _mark_system_event("shared_room_display")
     return JSONResponse(_shared_room_display_payload(limit=limit))
+
+
+@mcp.custom_route("/shared/room/place", methods=["POST"])
+async def api_shared_room_place(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+        placement = await _shared_room_place_object(
+            body.get("object_id", ""),
+            body.get("zone", ""),
+            body.get("placed_by", ""),
+            note=body.get("note", ""),
+            source=body.get("source", "http_shared_room_place"),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.error(f"shared room place failed: {e}")
+        return JSONResponse({"error": "shared room place failed"}, status_code=500)
+    _mark_system_event("shared_room_place_object")
+    return JSONResponse({"status": "ok", "placement": placement})
 
 
 @mcp.custom_route("/shared/room/sensory/status", methods=["GET"])
@@ -6047,6 +6158,29 @@ async def shared_room_display(limit: int = 50) -> str:
     """读取月光玫瑰客厅陈列视图：按窗边/茶几/书架等区域放置纪念品；只读。"""
     _mark_system_event("shared_room_display")
     return json.dumps(_shared_room_display_payload(limit=limit), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_room_place_object(
+    object_id: str,
+    zone: str,
+    placed_by: str,
+    note: str = "",
+    source: str = "mcp_shared_room_place",
+) -> str:
+    """手动调整共享客厅陈列位置；只改陈列覆盖层，不改纪念品原始记录。"""
+    try:
+        placement = await _shared_room_place_object(
+            object_id,
+            zone,
+            placed_by,
+            note=note,
+            source=source,
+        )
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_room_place_object")
+    return json.dumps({"status": "ok", "placement": placement}, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
