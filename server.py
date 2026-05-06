@@ -129,6 +129,8 @@ RUNTIME_FEATURES = {
     "runtime_connector_check_mcp_tool": True,
     "runtime_upstream_watch_http_endpoint": True,
     "runtime_upstream_watch_mcp_tool": True,
+    "runtime_source_routes_http_endpoint": True,
+    "runtime_source_routes_mcp_tool": True,
     "associated_memory_after_writes": True,
     "associated_memory_shows_provenance": True,
     "hold_provenance_defaults": True,
@@ -138,7 +140,7 @@ RUNTIME_FEATURES = {
     "cadence_draft_runtime_persistence": True,
     "diary_review_duplicate_detection": True,
 }
-RUNTIME_FEATURES_VERSION = "2026-05-05.provenance-v1"
+RUNTIME_FEATURES_VERSION = "2026-05-06.source-routes-v1"
 RUNTIME_FEATURE_COMMITS = {
     "runtime_features_http_endpoint": "a4528ec",
     "runtime_features_mcp_tool": "self",
@@ -152,6 +154,8 @@ RUNTIME_FEATURE_COMMITS = {
     "runtime_connector_check_mcp_tool": "self",
     "runtime_upstream_watch_http_endpoint": "self",
     "runtime_upstream_watch_mcp_tool": "self",
+    "runtime_source_routes_http_endpoint": "self",
+    "runtime_source_routes_mcp_tool": "self",
     "associated_memory_after_writes": "4d93255",
     "hold_provenance_defaults": "926b92d",
     "associated_memory_shows_provenance": "c4448c8",
@@ -182,6 +186,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "runtime_diagnostics",
     "runtime_features",
     "runtime_schema_expectations",
+    "runtime_source_routes",
     "runtime_tool_manifest",
     "runtime_upstream_watch",
     "save_tail_context",
@@ -288,6 +293,10 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "required": [],
         "optional": [],
     },
+    "runtime_source_routes": {
+        "required": [],
+        "optional": [],
+    },
 }
 RUNTIME_UPSTREAM_WATCH_ITEMS = [
     {
@@ -314,6 +323,59 @@ RUNTIME_UPSTREAM_WATCH_ITEMS = [
         ],
     }
 ]
+
+RUNTIME_SOURCE_ROUTE_GUIDE = {
+    "purpose": (
+        "Keep memories from ChatGPT daily windows, Codex engineering windows, API "
+        "clients, and future local/mobile surfaces distinguishable without changing "
+        "their human-readable content."
+    ),
+    "fields": {
+        "source_platform": "Container or client family, for example chatgpt/codex/api/local/mobile.",
+        "source_surface": "User-facing surface, for example daily_window/project_window/gateway/mobile_app.",
+        "source_window": "Optional stable window/thread label such as chatgpt_13 or codex_20260506.",
+        "source_mode": "Writing mode such as memory/diary/night_clean/engineering/diary_digest.",
+        "route_decision": "Server-side routing decision such as main_hold/diary_draft/engineering_workzone.",
+    },
+    "canonical_routes": {
+        "chatgpt_daily": {
+            "source_platform": "chatgpt",
+            "source_surface": "daily_window",
+            "source_window_example": "chatgpt_13",
+            "default_tools": ["hold", "grow", "write_diary_draft", "enqueue_night_clean_input"],
+        },
+        "codex_engineering": {
+            "source_platform": "codex",
+            "source_surface": "project_window",
+            "source_window_example": "codex_ombrebrain",
+            "default_tools": ["write_project_workzone_update", "runtime_connector_check"],
+        },
+        "api_gateway": {
+            "source_platform": "api",
+            "source_surface": "gateway",
+            "source_window_example": "api_client_or_device_id",
+            "default_tools": ["hold", "write_diary_draft", "enqueue_night_clean_input"],
+        },
+        "future_mobile": {
+            "source_platform": "mobile",
+            "source_surface": "mobile_app",
+            "source_window_example": "ios_or_android_device",
+            "default_tools": ["hold", "write_diary_draft"],
+        },
+        "local_desktop": {
+            "source_platform": "local",
+            "source_surface": "desktop_app",
+            "source_window_example": "mac_local",
+            "default_tools": ["hold", "write_project_workzone_update"],
+        },
+    },
+    "routing_rules": [
+        "Do not infer engineering updates into daily/life memory unless the caller intentionally uses a life-memory tool.",
+        "Do not use user-visible affectionate or life-chat wording as the only source of engineering state.",
+        "If source fields are absent, keep server defaults but expose unknown/default values in associated memory output.",
+        "Connector schema refresh is separate from server support; use runtime_connector_check when a window cannot see fields.",
+    ],
+}
 
 
 def _runtime_git_sha() -> str:
@@ -352,6 +414,7 @@ def _runtime_features_payload() -> dict:
             "diagnostics_endpoint": "/api/runtime/diagnostics",
             "connector_check_endpoint": "/api/runtime/connector-check",
             "upstream_watch_endpoint": "/api/runtime/upstream-watch",
+            "source_routes_endpoint": "/api/runtime/source-routes",
             "tool_manifest_endpoint": "/api/runtime/tool-manifest",
             "schema_expectations_endpoint": "/api/runtime/schema-expectations",
             "provenance_fields": [
@@ -388,6 +451,7 @@ def _runtime_tool_manifest_payload() -> dict:
             "runtime_diagnostics",
             "runtime_features",
             "runtime_schema_expectations",
+            "runtime_source_routes",
             "runtime_tool_manifest",
             "runtime_upstream_watch",
             "check_logs",
@@ -433,6 +497,26 @@ def _runtime_upstream_watch_payload() -> dict:
             "schema_expectations": "/api/runtime/schema-expectations",
             "connector_check": "/api/runtime/connector-check",
         },
+    }
+
+
+def _runtime_source_routes_payload() -> dict:
+    return {
+        "status": "ok",
+        "features_version": RUNTIME_FEATURES_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "source_route_guide": RUNTIME_SOURCE_ROUTE_GUIDE,
+        "provenance_fields": [
+            "source_platform",
+            "source_surface",
+            "source_window",
+            "source_mode",
+            "route_decision",
+        ],
+        "validation_note": (
+            "Source routes are provenance hints, not authorization. Secrets, tokens, "
+            "IP addresses, and account identifiers should not be written into memory."
+        ),
     }
 
 
@@ -600,6 +684,7 @@ def _runtime_diagnostics_payload() -> dict:
             "diagnostics": "/api/runtime/diagnostics",
             "connector_check": "/api/runtime/connector-check",
             "upstream_watch": "/api/runtime/upstream-watch",
+            "source_routes": "/api/runtime/source-routes",
         },
         "decision_tree": [
             "If diagnostics git_sha is old, deployment has not reached the running container yet.",
@@ -1127,6 +1212,13 @@ async def api_runtime_upstream_watch(request):
     from starlette.responses import JSONResponse
 
     return JSONResponse(_runtime_upstream_watch_payload())
+
+
+@mcp.custom_route("/api/runtime/source-routes", methods=["GET"])
+async def api_runtime_source_routes(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(_runtime_source_routes_payload())
 
 
 # =============================================================
@@ -3386,6 +3478,13 @@ async def runtime_upstream_watch() -> str:
     """读取上游升级观察位和只读 intake 路线。"""
     _mark_system_event("runtime_upstream_watch")
     return json.dumps(_runtime_upstream_watch_payload(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def runtime_source_routes() -> str:
+    """读取多平台来源字段约定，避免 ChatGPT/Codex/API/本地入口上下文串味。"""
+    _mark_system_event("runtime_source_routes")
+    return json.dumps(_runtime_source_routes_payload(), ensure_ascii=False, indent=2)
 
 
 # =============================================================
