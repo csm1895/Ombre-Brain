@@ -127,6 +127,8 @@ RUNTIME_FEATURES = {
     "runtime_diagnostics_mcp_tool": True,
     "runtime_connector_check_http_endpoint": True,
     "runtime_connector_check_mcp_tool": True,
+    "runtime_diary_review_health_http_endpoint": True,
+    "runtime_diary_review_health_mcp_tool": True,
     "runtime_upstream_watch_http_endpoint": True,
     "runtime_upstream_watch_mcp_tool": True,
     "runtime_source_routes_http_endpoint": True,
@@ -152,6 +154,8 @@ RUNTIME_FEATURE_COMMITS = {
     "runtime_diagnostics_mcp_tool": "self",
     "runtime_connector_check_http_endpoint": "self",
     "runtime_connector_check_mcp_tool": "self",
+    "runtime_diary_review_health_http_endpoint": "self",
+    "runtime_diary_review_health_mcp_tool": "self",
     "runtime_upstream_watch_http_endpoint": "self",
     "runtime_upstream_watch_mcp_tool": "self",
     "runtime_source_routes_http_endpoint": "self",
@@ -183,6 +187,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "reconsolidate",
     "reject_diary_review",
     "runtime_connector_check",
+    "runtime_diary_review_health",
     "runtime_diagnostics",
     "runtime_features",
     "runtime_schema_expectations",
@@ -290,6 +295,10 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
     "runtime_connector_check": {
         "required": [],
         "optional": ["observed_tools", "observed_schemas_json"],
+    },
+    "runtime_diary_review_health": {
+        "required": [],
+        "optional": [],
     },
     "runtime_upstream_watch": {
         "required": [],
@@ -449,6 +458,7 @@ def _runtime_tool_manifest_payload() -> dict:
             "list_diary_reviews",
             "read_diary_review",
             "read_latest_dream_text",
+            "runtime_diary_review_health",
             "runtime_connector_check",
             "runtime_diagnostics",
             "runtime_features",
@@ -519,6 +529,100 @@ def _runtime_source_routes_payload() -> dict:
             "Source routes are provenance hints, not authorization. Secrets, tokens, "
             "IP addresses, and account identifiers should not be written into memory."
         ),
+    }
+
+
+def _runtime_diary_review_health_payload() -> dict:
+    dirs = _cadence_review_dirs()
+    state_counts: dict[str, dict] = {}
+    latest_pending: list[dict] = []
+
+    for state, directory in dirs.items():
+        files = []
+        if os.path.isdir(directory):
+            files = [
+                os.path.join(directory, name)
+                for name in os.listdir(directory)
+                if name.endswith(".md")
+            ]
+            files.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+
+        counts = {
+            "total": 0,
+            "normal": 0,
+            "duplicate": 0,
+            "blocked": 0,
+            "identity_pov_conflict": 0,
+            "duplicate_candidate": 0,
+            "identity_metadata_status": {},
+            "duplicate_metadata_status": {},
+        }
+
+        for path in files:
+            try:
+                text = _tail_text_file(path, 2000).strip()
+            except Exception:
+                text = ""
+            identity_meta = _diary_review_identity_view_meta(text)
+            duplicate_meta = _diary_review_duplicate_view_meta(text, os.path.basename(path))
+            review_level = identity_meta.get("review_level", "unknown")
+            risk_flags = _split_risk_flags(identity_meta.get("risk_flags", ""))
+            identity_status = identity_meta.get("identity_metadata_status", "unknown")
+            duplicate_status = duplicate_meta.get("duplicate_metadata_status", "unknown")
+
+            counts["total"] += 1
+            if review_level in ("normal", "duplicate", "blocked"):
+                counts[review_level] += 1
+            if "identity_pov_conflict" in risk_flags:
+                counts["identity_pov_conflict"] += 1
+            if duplicate_meta.get("duplicate_candidate") == "true":
+                counts["duplicate_candidate"] += 1
+            counts["identity_metadata_status"][identity_status] = (
+                counts["identity_metadata_status"].get(identity_status, 0) + 1
+            )
+            counts["duplicate_metadata_status"][duplicate_status] = (
+                counts["duplicate_metadata_status"].get(duplicate_status, 0) + 1
+            )
+
+            if state == "pending" and len(latest_pending) < 5:
+                latest_pending.append({
+                    "review_id": os.path.basename(path),
+                    "narrator": identity_meta.get("narrator", "unknown"),
+                    "brain_owner": identity_meta.get("brain_owner", "unknown"),
+                    "expected_narrator": identity_meta.get("expected_narrator", "unknown"),
+                    "expected_brain_owner": identity_meta.get("expected_brain_owner", "unknown"),
+                    "review_level": review_level,
+                    "risk_flags": identity_meta.get("risk_flags", "unknown"),
+                    "identity_metadata_status": identity_status,
+                    "duplicate_candidate": duplicate_meta.get("duplicate_candidate", "false"),
+                    "similarity_score": duplicate_meta.get("similarity_score", "0.00"),
+                    "duplicate_of": duplicate_meta.get("duplicate_of", "none"),
+                    "duplicate_source_status": duplicate_meta.get("duplicate_source_status", "none"),
+                    "duplicate_metadata_status": duplicate_status,
+                })
+
+        state_counts[state] = counts
+
+    pending = state_counts.get("pending", {})
+    return {
+        "status": "ok",
+        "features_version": RUNTIME_FEATURES_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "read_only",
+        "main_brain_write": False,
+        "thresholds": {
+            "duplicate_similarity": DIARY_REVIEW_DUPLICATE_THRESHOLD,
+            "coverage_overlap": DIARY_REVIEW_DEDUP_OVERLAP_THRESHOLD,
+        },
+        "summary": {
+            "pending_total": pending.get("total", 0),
+            "pending_blocked": pending.get("blocked", 0),
+            "pending_duplicate": pending.get("duplicate", 0),
+            "pending_identity_pov_conflict": pending.get("identity_pov_conflict", 0),
+            "pending_duplicate_candidate": pending.get("duplicate_candidate", 0),
+        },
+        "states": state_counts,
+        "latest_pending": latest_pending,
     }
 
 
@@ -685,6 +789,7 @@ def _runtime_diagnostics_payload() -> dict:
             "schema_expectations": "/api/runtime/schema-expectations",
             "diagnostics": "/api/runtime/diagnostics",
             "connector_check": "/api/runtime/connector-check",
+            "diary_review_health": "/api/runtime/diary-review-health",
             "upstream_watch": "/api/runtime/upstream-watch",
             "source_routes": "/api/runtime/source-routes",
         },
@@ -1207,6 +1312,13 @@ async def api_runtime_connector_check(request):
         observed_tools=str(observed_tools or ""),
         observed_schemas_json=str(observed_schemas or ""),
     ))
+
+
+@mcp.custom_route("/api/runtime/diary-review-health", methods=["GET"])
+async def api_runtime_diary_review_health(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(_runtime_diary_review_health_payload())
 
 
 @mcp.custom_route("/api/runtime/upstream-watch", methods=["GET"])
@@ -3542,6 +3654,13 @@ async def runtime_connector_check(
         ensure_ascii=False,
         indent=2,
     )
+
+
+@mcp.tool()
+async def runtime_diary_review_health() -> str:
+    """读取 diary_review 队列健康总览；只读，不验收、不写主脑。"""
+    _mark_system_event("runtime_diary_review_health")
+    return json.dumps(_runtime_diary_review_health_payload(), ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
