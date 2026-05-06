@@ -133,6 +133,8 @@ RUNTIME_FEATURES = {
     "runtime_life_window_check_mcp_tool": True,
     "runtime_learning_intake_http_endpoint": True,
     "runtime_learning_intake_mcp_tool": True,
+    "runtime_upgrade_backlog_http_endpoint": True,
+    "runtime_upgrade_backlog_mcp_tool": True,
     "runtime_upstream_watch_http_endpoint": True,
     "runtime_upstream_watch_mcp_tool": True,
     "runtime_source_routes_http_endpoint": True,
@@ -164,6 +166,8 @@ RUNTIME_FEATURE_COMMITS = {
     "runtime_life_window_check_mcp_tool": "self",
     "runtime_learning_intake_http_endpoint": "self",
     "runtime_learning_intake_mcp_tool": "self",
+    "runtime_upgrade_backlog_http_endpoint": "self",
+    "runtime_upgrade_backlog_mcp_tool": "self",
     "runtime_upstream_watch_http_endpoint": "self",
     "runtime_upstream_watch_mcp_tool": "self",
     "runtime_source_routes_http_endpoint": "self",
@@ -203,6 +207,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "runtime_schema_expectations",
     "runtime_source_routes",
     "runtime_tool_manifest",
+    "runtime_upgrade_backlog",
     "runtime_upstream_watch",
     "save_tail_context",
     "search",
@@ -315,6 +320,10 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "optional": [],
     },
     "runtime_learning_intake": {
+        "required": [],
+        "optional": [],
+    },
+    "runtime_upgrade_backlog": {
         "required": [],
         "optional": [],
     },
@@ -770,6 +779,100 @@ def _runtime_learning_intake_payload() -> dict:
     }
 
 
+def _runtime_upgrade_backlog_payload() -> dict:
+    return {
+        "status": "ok",
+        "features_version": RUNTIME_FEATURES_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "read_only",
+        "main_brain_write": False,
+        "purpose": "Expose the current OmbreBrain upgrade map for cross-window handoff without mixing daily memory.",
+        "completed_today": [
+            {
+                "id": "source_routes",
+                "state": "landed",
+                "evidence": "/api/runtime/source-routes and runtime_source_routes",
+                "why_it_matters": "Every entry can declare whether it came from ChatGPT daily, Codex engineering, API gateway, mobile, or local desktop.",
+            },
+            {
+                "id": "diary_review_duplicate_read_side",
+                "state": "landed",
+                "evidence": "list_diary_reviews/read_diary_review expose duplicate metadata and legacy_computed status.",
+                "why_it_matters": "Old diary review candidates are no longer opaque when duplicate metadata was not persisted.",
+            },
+            {
+                "id": "identity_pov_guard",
+                "state": "landed",
+                "evidence": "diary review reads and accepts compute identity_metadata_status and risk_flags.",
+                "why_it_matters": "Other model names or narrator takeovers do not silently become Yechenyi memory.",
+            },
+            {
+                "id": "diary_review_health",
+                "state": "landed",
+                "evidence": "/api/runtime/diary-review-health and runtime_diary_review_health",
+                "why_it_matters": "Daily windows can quickly tell whether pending reviews are blocked, duplicate, or identity-risky.",
+            },
+            {
+                "id": "life_window_check",
+                "state": "landed",
+                "evidence": "/api/runtime/life-window-check and runtime_life_window_check",
+                "why_it_matters": "Daily ChatGPT windows can validate the car at the front door, not just the garage.",
+            },
+            {
+                "id": "learning_intake",
+                "state": "landed",
+                "evidence": "/api/runtime/learning-intake and runtime_learning_intake",
+                "why_it_matters": "External tutorials and debugging scars have a safe path into engineering experience.",
+            },
+        ],
+        "open_items": [
+            {
+                "id": "project_workzone_write_timeout",
+                "state": "needs_debug",
+                "symptom": "write_project_workzone_update can time out from Codex app while the runtime HTTP checks remain healthy.",
+                "safe_next_step": "Inspect wrapper write path separately: dehydrator, bucket create/update, associated memory search, and MCP transport timeout.",
+            },
+            {
+                "id": "chatgpt_schema_refresh",
+                "state": "operational_watch",
+                "symptom": "New tools may be live in tool-manifest before old ChatGPT windows expose them.",
+                "safe_next_step": "Use connector reconnect when manifest has the tool but the window list does not.",
+            },
+            {
+                "id": "upstream_ombrebrain_phase2",
+                "state": "watch_only",
+                "symptom": "User-reported phase 2 upgrade is expected soon but not yet confirmed here.",
+                "safe_next_step": "Compare upstream changes only after concrete GitHub evidence is available.",
+            },
+            {
+                "id": "local_reference_intake_notes",
+                "state": "planned",
+                "symptom": "Desktop 收藏教程 and copied blogger notes need a stable local intake format.",
+                "safe_next_step": "Add narrow _docs intake notes before turning any idea into runtime behavior.",
+            },
+            {
+                "id": "cloud_migration_learning_path",
+                "state": "planned",
+                "symptom": "Tencent Cloud migration should be learned gradually while Zeabur remains active.",
+                "safe_next_step": "Document deployment steps and failure modes without exposing secrets or account identifiers.",
+            },
+            {
+                "id": "mobile_presence_and_outbound",
+                "state": "future_design",
+                "symptom": "User wants phone-side proactive messages with clear consent and kill switches.",
+                "safe_next_step": "Design channel boundaries first; do not implement live outbound messaging without explicit gates.",
+            },
+        ],
+        "safe_boundaries": [
+            "This endpoint is read-only.",
+            "This endpoint does not inspect secrets, tokens, cookies, passwords, billing, or account storage.",
+            "This endpoint does not accept or reject diary reviews.",
+            "This endpoint does not write main brain memory.",
+            "Cross-window engineering notes should stay in engineering_workzone until they are verified.",
+        ],
+    }
+
+
 def _parse_observed_tools(observed_tools: str) -> list[str]:
     raw = (observed_tools or "").strip()
     if not raw:
@@ -937,6 +1040,7 @@ def _runtime_diagnostics_payload() -> dict:
             "learning_intake": "/api/runtime/learning-intake",
             "life_window_check": "/api/runtime/life-window-check",
             "upstream_watch": "/api/runtime/upstream-watch",
+            "upgrade_backlog": "/api/runtime/upgrade-backlog",
             "source_routes": "/api/runtime/source-routes",
         },
         "decision_tree": [
@@ -1479,6 +1583,13 @@ async def api_runtime_learning_intake(request):
     from starlette.responses import JSONResponse
 
     return JSONResponse(_runtime_learning_intake_payload())
+
+
+@mcp.custom_route("/api/runtime/upgrade-backlog", methods=["GET"])
+async def api_runtime_upgrade_backlog(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(_runtime_upgrade_backlog_payload())
 
 
 @mcp.custom_route("/api/runtime/upstream-watch", methods=["GET"])
@@ -3831,6 +3942,13 @@ async def runtime_learning_intake() -> str:
     """读取外部教程/开源项目/踩坑经验如何进入工程记忆的路线图；只读。"""
     _mark_system_event("runtime_learning_intake")
     return json.dumps(_runtime_learning_intake_payload(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def runtime_upgrade_backlog() -> str:
+    """读取海马体当前升级清单、已落地项、待修项与边界；只读。"""
+    _mark_system_event("runtime_upgrade_backlog")
+    return json.dumps(_runtime_upgrade_backlog_payload(), ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
