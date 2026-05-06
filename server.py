@@ -105,11 +105,13 @@ SHARED_CHANNEL_VISIBILITY = "shared_tech"
 SHARED_CHANNEL_VERSION = "shared_channel_v1"
 SHARED_SPACE_VERSION = "shared_space_v1"
 SHARED_TRAVEL_VERSION = "shared_travel_v1"
+SHARED_ROOM_SENSORY_VERSION = "shared_room_sensory_v1"
 SHARED_CHANNEL_MAX_CONTENT_CHARS = 4000
 SHARED_SPACE_MAX_CONTENT_CHARS = 8000
 SHARED_SPACE_ALLOWED_SECTIONS = ("tech_shelf", "house_rules", "shared_memory", "todo")
 SHARED_TECH_CARD_ALLOWED_STATUSES = ("unverified", "reading", "tested", "adopted", "rejected")
 SHARED_TRAVEL_ALLOWED_MODES = ("remote_source", "user_story", "guided_imaginal", "field_report")
+SHARED_ROOM_SENSORY_ALLOWED_CONTEXTS = ("room", "travel", "music", "souvenir_display", "transition")
 SHARED_TRAVEL_EXPERIENCE_POLICIES = {
     "immersive_aftercare": {
         "label": "沉浸体验，事后标注",
@@ -157,6 +159,7 @@ _runtime_ready_last_error = ""
 _shared_channel_lock = asyncio.Lock()
 _shared_space_lock = asyncio.Lock()
 _shared_travel_lock = asyncio.Lock()
+_shared_room_sensory_lock = asyncio.Lock()
 
 RUNTIME_FEATURES = {
     "runtime_features_http_endpoint": True,
@@ -192,6 +195,8 @@ RUNTIME_FEATURES = {
     "shared_space_atomic_json": True,
     "shared_room_snapshot_http_endpoint": True,
     "shared_room_snapshot_mcp_tool": True,
+    "shared_room_sensory_http_endpoints": True,
+    "shared_room_sensory_mcp_tools": True,
     "shared_tech_card_http_endpoint": True,
     "shared_tech_card_mcp_tool": True,
     "shared_tech_card_status_whitelist": True,
@@ -242,6 +247,8 @@ RUNTIME_FEATURE_COMMITS = {
     "shared_space_atomic_json": "self",
     "shared_room_snapshot_http_endpoint": "self",
     "shared_room_snapshot_mcp_tool": "self",
+    "shared_room_sensory_http_endpoints": "self",
+    "shared_room_sensory_mcp_tools": "self",
     "shared_tech_card_http_endpoint": "self",
     "shared_tech_card_mcp_tool": "self",
     "shared_tech_card_status_whitelist": "self",
@@ -298,6 +305,8 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "shared_read",
     "shared_reply",
     "shared_room_snapshot",
+    "shared_room_sensory_status",
+    "shared_room_sensory_update",
     "shared_space_status",
     "shared_status",
     "shared_tech_card_add",
@@ -473,6 +482,16 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "required": [],
         "optional": ["wall_limit", "item_limit"],
     },
+    "shared_room_sensory_status": {
+        "required": [],
+        "optional": [],
+    },
+    "shared_room_sensory_update": {
+        "required": ["updated_by"],
+        "optional": ["sight", "sound", "felt", "context", "source"],
+        "updated_by_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+        "context_whitelist": list(SHARED_ROOM_SENSORY_ALLOWED_CONTEXTS),
+    },
     "shared_tech_card_add": {
         "required": ["title", "summary", "sender"],
         "optional": ["url", "source_author", "status", "verified_by", "tags", "source"],
@@ -619,6 +638,14 @@ def _shared_space_items_path() -> str:
     return os.path.join(_shared_space_dir(), "items.json")
 
 
+def _shared_room_dir() -> str:
+    return os.path.join(_runtime_storage_base(), "shared_room")
+
+
+def _shared_room_sensory_path() -> str:
+    return os.path.join(_shared_room_dir(), "sensory.json")
+
+
 def _shared_travel_dir() -> str:
     return os.path.join(_runtime_storage_base(), "shared_travel")
 
@@ -721,6 +748,38 @@ def _shared_space_load_store() -> dict:
     return store
 
 
+def _shared_room_sensory_empty_store() -> dict:
+    return {
+        "version": SHARED_ROOM_SENSORY_VERSION,
+        "room": SHARED_TRAVEL_ROOM_NAME,
+        "current": {
+            "context": "room",
+            "sight": "月光玫瑰海景房客厅还没有写入当前视觉。",
+            "sound": "",
+            "felt": "",
+            "updated_by": "system",
+            "updated_at": "",
+            "source": "initial_empty_room",
+        },
+        "history": [],
+    }
+
+
+def _shared_room_sensory_load_store() -> dict:
+    store = _read_json_file(_shared_room_sensory_path(), _shared_room_sensory_empty_store())
+    if not isinstance(store, dict):
+        store = _shared_room_sensory_empty_store()
+    current = store.get("current")
+    if not isinstance(current, dict):
+        store["current"] = _shared_room_sensory_empty_store()["current"]
+    history = store.get("history")
+    if not isinstance(history, list):
+        store["history"] = []
+    store.setdefault("version", SHARED_ROOM_SENSORY_VERSION)
+    store.setdefault("room", SHARED_TRAVEL_ROOM_NAME)
+    return store
+
+
 def _shared_travel_empty_store() -> dict:
     return {
         "version": SHARED_TRAVEL_VERSION,
@@ -816,6 +875,14 @@ def _shared_travel_normalize_policy(experience_policy: str, traveler: str) -> st
     if normalized not in SHARED_TRAVEL_EXPERIENCE_POLICIES:
         allowed = ", ".join(SHARED_TRAVEL_EXPERIENCE_POLICIES.keys())
         raise ValueError(f"experience_policy must be one of: {allowed}")
+    return normalized
+
+
+def _shared_room_sensory_normalize_context(context: str) -> str:
+    normalized = (context or "room").strip().lower()
+    if normalized not in SHARED_ROOM_SENSORY_ALLOWED_CONTEXTS:
+        allowed = ", ".join(SHARED_ROOM_SENSORY_ALLOWED_CONTEXTS)
+        raise ValueError(f"context must be one of: {allowed}")
     return normalized
 
 
@@ -1020,6 +1087,87 @@ def _shared_travel_status_payload() -> dict:
     }
 
 
+def _shared_room_sensory_status_payload() -> dict:
+    store = _shared_room_sensory_load_store()
+    recent_souvenirs = _shared_souvenir_list(limit=6)
+    return {
+        "status": "ok",
+        "version": SHARED_ROOM_SENSORY_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "shared_room_sensory_only",
+        "main_brain_write": False,
+        "room": SHARED_TRAVEL_ROOM_NAME,
+        "canonical_base_url": SHARED_CHANNEL_CANONICAL_BASE_URL,
+        "canonical_mcp_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/mcp",
+        "canonical_status_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/shared/room/sensory/status",
+        "storage_dir": _shared_room_dir(),
+        "current": store.get("current", {}),
+        "history_count": len([item for item in store.get("history", []) if isinstance(item, dict)]),
+        "visible_souvenirs": [
+            {
+                "id": item.get("id", ""),
+                "title": item.get("title", ""),
+                "place": item.get("place", ""),
+                "traveler": item.get("traveler", ""),
+                "experience_policy": item.get("experience_policy", ""),
+            }
+            for item in recent_souvenirs
+        ],
+        "contexts": list(SHARED_ROOM_SENSORY_ALLOWED_CONTEXTS),
+        "channels": ["sight", "sound", "felt"],
+        "endpoints": {
+            "status": "/shared/room/sensory/status",
+            "update": "/shared/room/sensory",
+        },
+        "mcp_tools": ["shared_room_sensory_status", "shared_room_sensory_update"],
+        "boundaries": [
+            "Room sensory text is a generated/curated state layer, not a claim of physical embodiment.",
+            "Write environmental stimuli and room details; avoid forcing conclusions like 'you feel happy'.",
+            "The state is shared-room display data and does not write private hippocampus memory by itself.",
+            "Do not store private intimate content, secrets, tokens, passwords, cookies, billing, or account identifiers.",
+        ],
+    }
+
+
+async def _shared_room_sensory_update(
+    updated_by: str,
+    sight: str = "",
+    sound: str = "",
+    felt: str = "",
+    context: str = "room",
+    source: str = "",
+) -> dict:
+    updated_by = _shared_channel_normalize_sender(updated_by, "updated_by")
+    context = _shared_room_sensory_normalize_context(context)
+    sight = (sight or "").strip()[:500]
+    sound = (sound or "").strip()[:500]
+    felt = (felt or "").strip()[:500]
+    if not any([sight, sound, felt]):
+        raise ValueError("at least one sensory channel is required")
+    source = (source or "").strip()[:80] or "unknown"
+    async with _shared_room_sensory_lock:
+        store = _shared_room_sensory_load_store()
+        now = datetime.now(CST)
+        previous = store.get("current", {}) if isinstance(store.get("current"), dict) else {}
+        current = {
+            "context": context,
+            "sight": sight,
+            "sound": sound,
+            "felt": felt,
+            "updated_by": updated_by,
+            "updated_at": now.isoformat(),
+            "source": source,
+        }
+        history = [item for item in store.get("history", []) if isinstance(item, dict)]
+        if previous:
+            history.append(previous)
+        store["current"] = current
+        store["history"] = history[-100:]
+        store["updated_at"] = now.isoformat()
+        _atomic_write_json(_shared_room_sensory_path(), store)
+        return current
+
+
 async def _shared_space_add_item(
     section: str,
     title: str,
@@ -1191,10 +1339,10 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
         "room_name": "mirror_living_room",
         "display_name": "镜像客厅",
         "frontend_hint": {
-            "left_nav": ["technical_wall", "tech_shelf", "house_rules", "shared_memory", "todo"],
+            "left_nav": ["technical_wall", "tech_shelf", "room_sensory", "travel_souvenirs", "house_rules", "shared_memory", "todo"],
             "center": "selected section content",
             "right": "presence and boundaries",
-            "bottom_input_modes": ["post_to_wall", "save_to_shelf", "mark_house_rule", "save_shared_memory", "add_todo"],
+            "bottom_input_modes": ["post_to_wall", "save_to_shelf", "update_room_sensory", "add_souvenir", "mark_house_rule", "save_shared_memory", "add_todo"],
         },
         "presence": [
             {"id": "qianqian", "name": "倩倩", "role": "human_owner", "can_write": True},
@@ -1210,6 +1358,10 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
             "status": space_status,
             "sections": grouped_items,
             "tools": ["shared_space_status", "shared_item_add", "shared_item_list", "shared_tech_card_add"],
+        },
+        "room_sensory": {
+            "status": _shared_room_sensory_status_payload(),
+            "tools": ["shared_room_sensory_status", "shared_room_sensory_update"],
         },
         "travel_souvenirs": {
             "status": _shared_travel_status_payload(),
@@ -1709,6 +1861,12 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "evidence": "/shared/travel/status plus shared_souvenir_add/shared_souvenir_list/shared_travel_status",
                 "why_it_matters": "AI travel experiences can bring traceable souvenirs and stories back to the Moon Rose seaview living room frontend.",
             },
+            {
+                "id": "shared_room_sensory_v1",
+                "state": "landed",
+                "evidence": "/shared/room/sensory/status plus shared_room_sensory_status/shared_room_sensory_update",
+                "why_it_matters": "The Moon Rose room can now expose sight/sound/felt channels for a frontend and future generated travel scenes.",
+            },
         ],
         "open_items": [
             {
@@ -1936,6 +2094,7 @@ def _runtime_diagnostics_payload() -> dict:
             "shared_channel_status": "/shared/channel/status",
             "shared_space_status": "/shared/space/status",
             "shared_room_snapshot": "/shared/room/snapshot",
+            "shared_room_sensory_status": "/shared/room/sensory/status",
             "shared_tech_card": "/shared/space/tech-card",
             "shared_travel_status": "/shared/travel/status",
         },
@@ -2731,6 +2890,38 @@ async def api_shared_room_snapshot(request):
         item_limit = 8
     _mark_system_event("shared_room_snapshot")
     return JSONResponse(_shared_room_snapshot_payload(wall_limit=wall_limit, item_limit=item_limit))
+
+
+@mcp.custom_route("/shared/room/sensory/status", methods=["GET"])
+async def api_shared_room_sensory_status(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(_shared_room_sensory_status_payload())
+
+
+@mcp.custom_route("/shared/room/sensory", methods=["POST"])
+async def api_shared_room_sensory(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+        current = await _shared_room_sensory_update(
+            body.get("updated_by", ""),
+            sight=body.get("sight", ""),
+            sound=body.get("sound", ""),
+            felt=body.get("felt", ""),
+            context=body.get("context", "room"),
+            source=body.get("source", "http_shared_room_sensory"),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.error(f"shared room sensory update failed: {e}")
+        return JSONResponse({"error": "shared room sensory update failed"}, status_code=500)
+    _mark_system_event("shared_room_sensory_update")
+    return JSONResponse({"status": "ok", "current": current})
 
 
 @mcp.custom_route("/shared/travel/status", methods=["GET"])
@@ -5343,6 +5534,38 @@ async def shared_room_snapshot(wall_limit: int = 12, item_limit: int = 8) -> str
         ensure_ascii=False,
         indent=2,
     )
+
+
+@mcp.tool()
+async def shared_room_sensory_status() -> str:
+    """读取月光玫瑰海景房客厅三通道感知状态；只读。"""
+    _mark_system_event("shared_room_sensory_status")
+    return json.dumps(_shared_room_sensory_status_payload(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_room_sensory_update(
+    updated_by: str,
+    sight: str = "",
+    sound: str = "",
+    felt: str = "",
+    context: str = "room",
+    source: str = "mcp_shared_room_sensory",
+) -> str:
+    """更新月光玫瑰海景房客厅三通道感知状态；写环境刺激，不强写感受结论。"""
+    try:
+        current = await _shared_room_sensory_update(
+            updated_by,
+            sight=sight,
+            sound=sound,
+            felt=felt,
+            context=context,
+            source=source,
+        )
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_room_sensory_update")
+    return json.dumps({"status": "ok", "current": current}, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
