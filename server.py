@@ -106,6 +106,7 @@ SHARED_CHANNEL_VERSION = "shared_channel_v1"
 SHARED_SPACE_VERSION = "shared_space_v1"
 SHARED_TRAVEL_VERSION = "shared_travel_v1"
 SHARED_ROOM_SENSORY_VERSION = "shared_room_sensory_v1"
+SHARED_ROOM_ENVIRONMENT_VERSION = "shared_room_environment_v1"
 SHARED_CHANNEL_MAX_CONTENT_CHARS = 4000
 SHARED_SPACE_MAX_CONTENT_CHARS = 8000
 SHARED_SPACE_ALLOWED_SECTIONS = ("tech_shelf", "house_rules", "shared_memory", "todo")
@@ -225,6 +226,8 @@ RUNTIME_FEATURES = {
     "shared_space_atomic_json": True,
     "shared_room_snapshot_http_endpoint": True,
     "shared_room_snapshot_mcp_tool": True,
+    "shared_room_environment_http_endpoint": True,
+    "shared_room_environment_mcp_tool": True,
     "shared_room_sensory_http_endpoints": True,
     "shared_room_sensory_mcp_tools": True,
     "shared_tech_card_http_endpoint": True,
@@ -277,6 +280,8 @@ RUNTIME_FEATURE_COMMITS = {
     "shared_space_atomic_json": "self",
     "shared_room_snapshot_http_endpoint": "self",
     "shared_room_snapshot_mcp_tool": "self",
+    "shared_room_environment_http_endpoint": "self",
+    "shared_room_environment_mcp_tool": "self",
     "shared_room_sensory_http_endpoints": "self",
     "shared_room_sensory_mcp_tools": "self",
     "shared_tech_card_http_endpoint": "self",
@@ -335,6 +340,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "shared_read",
     "shared_reply",
     "shared_room_snapshot",
+    "shared_room_environment",
     "shared_room_display",
     "shared_room_place_object",
     "shared_room_sensory_status",
@@ -520,6 +526,10 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
     "shared_room_snapshot": {
         "required": [],
         "optional": ["wall_limit", "item_limit"],
+    },
+    "shared_room_environment": {
+        "required": [],
+        "optional": [],
     },
     "shared_room_display": {
         "required": [],
@@ -2115,6 +2125,156 @@ def _shared_space_list_items(section: str = "", limit: int = 20, tag: str = "") 
     return items[-limit:]
 
 
+def _shared_room_environment_season(month: int) -> dict:
+    if month in (3, 4, 5):
+        return {
+            "id": "spring",
+            "label": "春",
+            "garden": "院子里樱花和新叶最亮，茶花接近尾声，爬藤月季开始抽枝。",
+            "plants": {
+                "camellia": "早春余花或花后新叶",
+                "cherry_blossom": "盛开到落英之间",
+                "climbing_rose_wall": "新枝攀墙，花苞开始准备",
+            },
+        }
+    if month in (6, 7, 8):
+        return {
+            "id": "summer",
+            "label": "夏",
+            "garden": "爬藤月季墙最繁盛，院子绿意很深，海风里有温热潮气。",
+            "plants": {
+                "camellia": "浓绿叶片为主",
+                "cherry_blossom": "樱树成荫",
+                "climbing_rose_wall": "花墙繁茂",
+            },
+        }
+    if month in (9, 10, 11):
+        return {
+            "id": "autumn",
+            "label": "秋",
+            "garden": "花少一些，藤叶和樱树叶开始转色，院子变得安静清透。",
+            "plants": {
+                "camellia": "准备冬春花期",
+                "cherry_blossom": "叶色转暖",
+                "climbing_rose_wall": "花后修整，藤叶渐深",
+            },
+        }
+    return {
+        "id": "winter",
+        "label": "冬",
+        "garden": "枝条清冷，茶花撑起冬季花色，海边空气更干净。",
+        "plants": {
+            "camellia": "冬季花色主角",
+            "cherry_blossom": "枝条休眠",
+            "climbing_rose_wall": "藤架安静，等春天再醒",
+        },
+    }
+
+
+def _shared_room_environment_day_phase(hour: int) -> dict:
+    if 5 <= hour <= 6:
+        return {
+            "id": "dawn",
+            "label": "清晨",
+            "light": "海面发蓝，落地窗边有一点冷金色。",
+            "sea": "悬崖下的海刚亮起来，浪声比人声先醒。",
+        }
+    if 7 <= hour <= 10:
+        return {
+            "id": "morning",
+            "label": "上午",
+            "light": "日光从落地窗铺进客厅，玻璃边缘很亮。",
+            "sea": "海面清澈，适合把纪念品拿到窗边看。",
+        }
+    if 11 <= hour <= 14:
+        return {
+            "id": "noon",
+            "label": "正午",
+            "light": "房间光线稳定，院子和海面都很清楚。",
+            "sea": "海色偏亮，悬崖边风声干净。",
+        }
+    if 15 <= hour <= 17:
+        return {
+            "id": "afternoon",
+            "label": "午后",
+            "light": "光线斜下来，客厅影子变长。",
+            "sea": "海面开始有柔和反光，像慢慢收拢的一天。",
+        }
+    if 18 <= hour <= 19:
+        return {
+            "id": "dusk",
+            "label": "黄昏",
+            "light": "落地窗外有橙金色，日落把海面照暖。",
+            "sea": "悬崖海边进入日落时段，适合看远方。",
+        }
+    if 20 <= hour <= 22:
+        return {
+            "id": "evening",
+            "label": "夜晚",
+            "light": "客厅灯亮起来，窗外海面退成深蓝。",
+            "sea": "只能看见暗色海线和一点月光。",
+        }
+    return {
+        "id": "late_night",
+        "label": "深夜",
+        "light": "房间安静，落地窗像一块深色镜面。",
+        "sea": "浪声留在远处，院子和海边都睡着了。",
+    }
+
+
+def _shared_room_environment_payload() -> dict:
+    now = datetime.now(CST)
+    season = _shared_room_environment_season(now.month)
+    day_phase = _shared_room_environment_day_phase(now.hour)
+    return {
+        "status": "ok",
+        "version": SHARED_ROOM_ENVIRONMENT_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "read_only",
+        "main_brain_write": False,
+        "room": SHARED_TRAVEL_ROOM_NAME,
+        "display_name": "月光玫瑰海景房",
+        "time_source": {
+            "timezone": "Asia/Shanghai",
+            "now": now.isoformat(),
+            "derived_from_real_time": True,
+            "weather_connected": False,
+        },
+        "day_phase": day_phase,
+        "season": season,
+        "layout": {
+            "floor_to_ceiling_window": {
+                "label": "落地窗",
+                "faces": "cliff_sea",
+                "view": day_phase["sea"],
+                "role": "看远方、日出日落、海面、旅行纪念品展示",
+            },
+            "front_door": {
+                "label": "大门",
+                "faces": "garden",
+                "view": season["garden"],
+                "role": "回到院子、茶花、樱花、爬藤月季墙",
+            },
+            "living_room": {
+                "label": "客厅",
+                "zones": ["technical_wall", "tech_shelf", "travel_cabinet", "shared_pet", "coffee_table"],
+            },
+        },
+        "atmosphere": {
+            "sight": f"{day_phase['light']} {season['garden']}",
+            "sound": "远处有海浪声；天气接口未接入前，雨声和风声先由感官状态手动写入。",
+            "felt": "空间状态随真实时间切换；季节用于前端植被和色调变化。",
+        },
+        "endpoints": {"environment": "/shared/room/environment"},
+        "mcp_tools": ["shared_room_environment"],
+        "boundaries": [
+            "This environment state is derived display context; it does not write private memory.",
+            "Weather is intentionally not fetched yet; no external location or account data is used.",
+            "Frontend can render this as 2D zones first, then upgrade to generated images or 3D later.",
+        ],
+    }
+
+
 def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> dict:
     wall_limit = max(1, min(int(wall_limit or 12), 50))
     item_limit = max(1, min(int(item_limit or 8), 50))
@@ -2137,7 +2297,7 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
         "room_name": "mirror_living_room",
         "display_name": "镜像客厅",
         "frontend_hint": {
-            "left_nav": ["technical_wall", "tech_shelf", "room_display", "room_sensory", "shared_pet", "travel_cabinet", "travel_souvenirs", "house_rules", "shared_memory", "todo"],
+            "left_nav": ["technical_wall", "tech_shelf", "room_environment", "room_display", "room_sensory", "shared_pet", "travel_cabinet", "travel_souvenirs", "house_rules", "shared_memory", "todo"],
             "center": "selected section content",
             "right": "presence and boundaries",
             "bottom_input_modes": ["post_to_wall", "save_to_shelf", "update_room_sensory", "pet_action", "add_souvenir", "mark_house_rule", "save_shared_memory", "add_todo"],
@@ -2156,6 +2316,10 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
             "status": space_status,
             "sections": grouped_items,
             "tools": ["shared_space_status", "shared_item_add", "shared_item_list", "shared_tech_card_add"],
+        },
+        "room_environment": {
+            "status": _shared_room_environment_payload(),
+            "tools": ["shared_room_environment"],
         },
         "room_sensory": {
             "status": _shared_room_sensory_status_payload(),
@@ -2714,6 +2878,12 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "evidence": "/shared/pet/status plus shared_pet_status/shared_pet_adopt/shared_pet_interact",
                 "why_it_matters": "The living room can later adopt a shared simulated pet with hunger, companionship, play, and cleanliness state after all sides agree.",
             },
+            {
+                "id": "shared_room_environment_v1",
+                "state": "landed",
+                "evidence": "/shared/room/environment plus shared_room_environment",
+                "why_it_matters": "The Moon Rose seaview room can expose real-time day phase, season, sea-window, and garden state for a future frontend.",
+            },
         ],
         "open_items": [
             {
@@ -2941,6 +3111,7 @@ def _runtime_diagnostics_payload() -> dict:
             "shared_channel_status": "/shared/channel/status",
             "shared_space_status": "/shared/space/status",
             "shared_room_snapshot": "/shared/room/snapshot",
+            "shared_room_environment": "/shared/room/environment",
             "shared_room_display": "/shared/room/display",
             "shared_room_sensory_status": "/shared/room/sensory/status",
             "shared_pet_status": "/shared/pet/status",
@@ -3741,6 +3912,14 @@ async def api_shared_room_snapshot(request):
         item_limit = 8
     _mark_system_event("shared_room_snapshot")
     return JSONResponse(_shared_room_snapshot_payload(wall_limit=wall_limit, item_limit=item_limit))
+
+
+@mcp.custom_route("/shared/room/environment", methods=["GET"])
+async def api_shared_room_environment(request):
+    from starlette.responses import JSONResponse
+
+    _mark_system_event("shared_room_environment")
+    return JSONResponse(_shared_room_environment_payload())
 
 
 @mcp.custom_route("/shared/room/display", methods=["GET"])
@@ -6577,6 +6756,13 @@ async def shared_room_snapshot(wall_limit: int = 12, item_limit: int = 8) -> str
         ensure_ascii=False,
         indent=2,
     )
+
+
+@mcp.tool()
+async def shared_room_environment() -> str:
+    """读取月光玫瑰海景房真实时间驱动的天光、季节、落地窗海景和院子状态；只读。"""
+    _mark_system_event("shared_room_environment")
+    return json.dumps(_shared_room_environment_payload(), ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
