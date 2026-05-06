@@ -112,6 +112,28 @@ SHARED_SPACE_ALLOWED_SECTIONS = ("tech_shelf", "house_rules", "shared_memory", "
 SHARED_TECH_CARD_ALLOWED_STATUSES = ("unverified", "reading", "tested", "adopted", "rejected")
 SHARED_TRAVEL_ALLOWED_MODES = ("remote_source", "user_story", "guided_imaginal", "field_report")
 SHARED_ROOM_SENSORY_ALLOWED_CONTEXTS = ("room", "travel", "music", "souvenir_display", "transition")
+SHARED_ROOM_DISPLAY_ZONES = {
+    "window_sill": {
+        "label": "窗边",
+        "keywords": ("窗边", "窗台", "window", "sill"),
+    },
+    "coffee_table": {
+        "label": "茶几",
+        "keywords": ("茶几", "托盘", "桌", "table"),
+    },
+    "tech_shelf": {
+        "label": "技术书架",
+        "keywords": ("书架", "书柜", "shelf", "bookshelf"),
+    },
+    "memory_wall": {
+        "label": "记忆墙",
+        "keywords": ("墙", "白板", "软木板", "wall"),
+    },
+    "living_room": {
+        "label": "客厅",
+        "keywords": (),
+    },
+}
 SHARED_TRAVEL_EXPERIENCE_POLICIES = {
     "immersive_aftercare": {
         "label": "沉浸体验，事后标注",
@@ -305,6 +327,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "shared_read",
     "shared_reply",
     "shared_room_snapshot",
+    "shared_room_display",
     "shared_room_sensory_status",
     "shared_room_sensory_update",
     "shared_space_status",
@@ -484,6 +507,11 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
     "shared_room_snapshot": {
         "required": [],
         "optional": ["wall_limit", "item_limit"],
+    },
+    "shared_room_display": {
+        "required": [],
+        "optional": ["limit"],
+        "zones": list(SHARED_ROOM_DISPLAY_ZONES.keys()),
     },
     "shared_room_sensory_status": {
         "required": [],
@@ -916,6 +944,17 @@ def _shared_travel_item_policy(item: dict) -> str:
     if traveler not in SHARED_CHANNEL_ALLOWED_SENDERS:
         traveler = "system"
     return _shared_travel_normalize_policy(str(item.get("experience_policy") or ""), traveler)
+
+
+def _shared_room_display_zone_for_place(place: str) -> str:
+    text = (place or "").strip().lower()
+    for zone, spec in SHARED_ROOM_DISPLAY_ZONES.items():
+        if zone == "living_room":
+            continue
+        for keyword in spec.get("keywords", ()):
+            if keyword.lower() in text:
+                return zone
+    return "living_room"
 
 
 def _shared_room_sensory_normalize_context(context: str) -> str:
@@ -1583,6 +1622,70 @@ def _shared_travel_atlas_payload(limit: int = 50, traveler: str = "", tag: str =
     }
 
 
+def _shared_room_display_payload(limit: int = 50) -> dict:
+    limit = max(1, min(int(limit or 50), 100))
+    store = _shared_travel_load_store()
+    souvenirs = [item for item in store.get("souvenirs", []) if isinstance(item, dict)][-limit:]
+    travelogues = [item for item in store.get("travelogues", []) if isinstance(item, dict)][-limit:]
+    travelogue_by_souvenir: dict[str, list[str]] = {}
+    for travelogue in travelogues:
+        travelogue_id = str(travelogue.get("id") or "")
+        if not travelogue_id:
+            continue
+        for souvenir_id in travelogue.get("souvenir_ids") or []:
+            sid = str(souvenir_id)
+            travelogue_by_souvenir.setdefault(sid, []).append(travelogue_id)
+
+    zones = {
+        zone: {
+            "zone": zone,
+            "label": spec.get("label", zone),
+            "objects": [],
+        }
+        for zone, spec in SHARED_ROOM_DISPLAY_ZONES.items()
+    }
+    for souvenir in souvenirs:
+        place = str(souvenir.get("place") or "")
+        zone = _shared_room_display_zone_for_place(place)
+        souvenir_id = str(souvenir.get("id") or "")
+        zones[zone]["objects"].append({
+            "id": souvenir_id,
+            "type": "souvenir",
+            "title": souvenir.get("title", ""),
+            "place": place,
+            "traveler": souvenir.get("traveler", ""),
+            "sensory": souvenir.get("sensory", {}),
+            "experience_mode": souvenir.get("experience_mode", ""),
+            "experience_policy": _shared_travel_item_policy(souvenir),
+            "travelogue_ids": travelogue_by_souvenir.get(souvenir_id, []),
+            "created_at": souvenir.get("created_at", ""),
+        })
+
+    normalized_zones = []
+    for zone in SHARED_ROOM_DISPLAY_ZONES:
+        entry = zones[zone]
+        entry["object_count"] = len(entry["objects"])
+        normalized_zones.append(entry)
+    current_sensory = _shared_room_sensory_load_store().get("current", {})
+    return {
+        "status": "ok",
+        "version": "shared_room_display_v1",
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "read_only",
+        "main_brain_write": False,
+        "room": SHARED_TRAVEL_ROOM_NAME,
+        "display_name": "月光玫瑰海景房客厅",
+        "zones": normalized_zones,
+        "current_sensory": current_sensory if isinstance(current_sensory, dict) else {},
+        "endpoints": {"display": "/shared/room/display"},
+        "mcp_tools": ["shared_room_display"],
+        "boundaries": [
+            "Room display is frontend layout data derived from shared travel objects.",
+            "Display entries do not write or promote private hippocampus memory.",
+        ],
+    }
+
+
 def _shared_space_list_items(section: str = "", limit: int = 20, tag: str = "") -> list[dict]:
     store = _shared_space_load_store()
     items = [item for item in store.get("items", []) if isinstance(item, dict)]
@@ -1618,7 +1721,7 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
         "room_name": "mirror_living_room",
         "display_name": "镜像客厅",
         "frontend_hint": {
-            "left_nav": ["technical_wall", "tech_shelf", "room_sensory", "travel_souvenirs", "house_rules", "shared_memory", "todo"],
+            "left_nav": ["technical_wall", "tech_shelf", "room_display", "room_sensory", "travel_souvenirs", "house_rules", "shared_memory", "todo"],
             "center": "selected section content",
             "right": "presence and boundaries",
             "bottom_input_modes": ["post_to_wall", "save_to_shelf", "update_room_sensory", "add_souvenir", "mark_house_rule", "save_shared_memory", "add_todo"],
@@ -1641,6 +1744,10 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
         "room_sensory": {
             "status": _shared_room_sensory_status_payload(),
             "tools": ["shared_room_sensory_status", "shared_room_sensory_update"],
+        },
+        "room_display": {
+            "status": _shared_room_display_payload(limit=item_limit),
+            "tools": ["shared_room_display"],
         },
         "travel_souvenirs": {
             "status": _shared_travel_status_payload(),
@@ -2167,6 +2274,12 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "evidence": "/shared/travel/atlas plus shared_travel_atlas",
                 "why_it_matters": "The frontend can show a travel passport/map grouped by place, linking each place to souvenirs and travelogues.",
             },
+            {
+                "id": "shared_room_display_v1",
+                "state": "landed",
+                "evidence": "/shared/room/display plus shared_room_display",
+                "why_it_matters": "The frontend can render Moon Rose room zones and place souvenirs in areas like the window sill instead of showing only raw lists.",
+            },
         ],
         "open_items": [
             {
@@ -2394,6 +2507,7 @@ def _runtime_diagnostics_payload() -> dict:
             "shared_channel_status": "/shared/channel/status",
             "shared_space_status": "/shared/space/status",
             "shared_room_snapshot": "/shared/room/snapshot",
+            "shared_room_display": "/shared/room/display",
             "shared_room_sensory_status": "/shared/room/sensory/status",
             "shared_tech_card": "/shared/space/tech-card",
             "shared_travel_status": "/shared/travel/status",
@@ -3191,6 +3305,18 @@ async def api_shared_room_snapshot(request):
         item_limit = 8
     _mark_system_event("shared_room_snapshot")
     return JSONResponse(_shared_room_snapshot_payload(wall_limit=wall_limit, item_limit=item_limit))
+
+
+@mcp.custom_route("/shared/room/display", methods=["GET"])
+async def api_shared_room_display(request):
+    from starlette.responses import JSONResponse
+
+    try:
+        limit = int(request.query_params.get("limit", 50))
+    except Exception:
+        limit = 50
+    _mark_system_event("shared_room_display")
+    return JSONResponse(_shared_room_display_payload(limit=limit))
 
 
 @mcp.custom_route("/shared/room/sensory/status", methods=["GET"])
@@ -5914,6 +6040,13 @@ async def shared_room_snapshot(wall_limit: int = 12, item_limit: int = 8) -> str
         ensure_ascii=False,
         indent=2,
     )
+
+
+@mcp.tool()
+async def shared_room_display(limit: int = 50) -> str:
+    """读取月光玫瑰客厅陈列视图：按窗边/茶几/书架等区域放置纪念品；只读。"""
+    _mark_system_event("shared_room_display")
+    return json.dumps(_shared_room_display_payload(limit=limit), ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
