@@ -259,6 +259,7 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
             "similarity_score",
             "duplicate_of",
             "duplicate_source_status",
+            "duplicate_metadata_status",
         ],
     },
     "read_diary_review": {
@@ -1876,6 +1877,29 @@ def _diary_review_duplicate_meta(candidate_text: str, exclude_review_id: str = "
     }
 
 
+DIARY_REVIEW_DUPLICATE_FIELDS = (
+    "duplicate_candidate",
+    "similarity_score",
+    "duplicate_of",
+    "duplicate_source_status",
+)
+
+
+def _diary_review_duplicate_view_meta(text: str, review_id: str = "") -> dict[str, str]:
+    meta = _simple_frontmatter(text or "")
+    if all(field in meta for field in DIARY_REVIEW_DUPLICATE_FIELDS):
+        return {
+            "duplicate_candidate": meta.get("duplicate_candidate", "false"),
+            "similarity_score": meta.get("similarity_score", "0.00"),
+            "duplicate_of": meta.get("duplicate_of", "none"),
+            "duplicate_source_status": meta.get("duplicate_source_status", "none"),
+            "duplicate_metadata_status": meta.get("duplicate_metadata_status", "persisted"),
+        }
+    computed = _diary_review_duplicate_meta(text or "", exclude_review_id=review_id)
+    computed["duplicate_metadata_status"] = "legacy_computed"
+    return computed
+
+
 def _diary_review_metadata(candidate_text: str, duplicate_meta: dict[str, str] | None = None) -> dict[str, str]:
     risk_flags = _diary_review_risk_flags(candidate_text)
     duplicate_meta = duplicate_meta or {}
@@ -1898,6 +1922,7 @@ def _diary_review_metadata(candidate_text: str, duplicate_meta: dict[str, str] |
         "similarity_score": duplicate_meta.get("similarity_score", "0.00"),
         "duplicate_of": duplicate_meta.get("duplicate_of", "none"),
         "duplicate_source_status": duplicate_meta.get("duplicate_source_status", "none"),
+        "duplicate_metadata_status": "persisted",
     }
 
 
@@ -2011,6 +2036,7 @@ def _write_diary_review_candidate(
         f"similarity_score: {review_meta['similarity_score']}",
         f"duplicate_of: {review_meta['duplicate_of']}",
         f"duplicate_source_status: {review_meta['duplicate_source_status']}",
+        f"duplicate_metadata_status: {review_meta['duplicate_metadata_status']}",
         f"candidate_path: {candidate_path}",
         f"created_at: {now_cst.isoformat()}",
         "---",
@@ -4079,6 +4105,7 @@ async def list_diary_reviews(limit: int = 10) -> str:
         except Exception:
             text = ""
         meta = _simple_frontmatter(text)
+        duplicate_meta = _diary_review_duplicate_view_meta(text, os.path.basename(path))
         body = text.split("---", 2)[2].strip() if text.startswith("---") and len(text.split("---", 2)) == 3 else text
         snippet = strip_wikilinks(body).replace("\n", " ").strip()[:220]
         rows.append(
@@ -4087,10 +4114,11 @@ async def list_diary_reviews(limit: int = 10) -> str:
             f"  brain_owner: {meta.get('brain_owner', 'unknown')}\n"
             f"  review_level: {meta.get('review_level', 'unknown')}\n"
             f"  risk_flags: {meta.get('risk_flags', 'unknown')}\n"
-            f"  duplicate_candidate: {meta.get('duplicate_candidate', 'legacy_missing')}\n"
-            f"  similarity_score: {meta.get('similarity_score', 'legacy_missing')}\n"
-            f"  duplicate_of: {meta.get('duplicate_of', 'legacy_missing')}\n"
-            f"  duplicate_source_status: {meta.get('duplicate_source_status', 'legacy_missing')}\n"
+            f"  duplicate_candidate: {duplicate_meta.get('duplicate_candidate', 'false')}\n"
+            f"  similarity_score: {duplicate_meta.get('similarity_score', '0.00')}\n"
+            f"  duplicate_of: {duplicate_meta.get('duplicate_of', 'none')}\n"
+            f"  duplicate_source_status: {duplicate_meta.get('duplicate_source_status', 'none')}\n"
+            f"  duplicate_metadata_status: {duplicate_meta.get('duplicate_metadata_status', 'unknown')}\n"
             f"  mentioned_entities: {meta.get('mentioned_entities', 'unknown')}\n"
             f"  laid_entities: {meta.get('laid_entities', 'unknown')}\n"
             f"  preview: {snippet or '（空候选）'}"
@@ -4111,6 +4139,7 @@ async def read_diary_review(review_id: str) -> str:
     try:
         text = _tail_text_file(source_path, 2000).strip()
         meta = _simple_frontmatter(text)
+        duplicate_meta = _diary_review_duplicate_view_meta(text, safe_id)
         body = _strip_frontmatter_text(text)
         return (
             "diary_review_text\n"
@@ -4124,10 +4153,11 @@ async def read_diary_review(review_id: str) -> str:
             f"- brain_owner: {meta.get('brain_owner', 'unknown')}\n"
             f"- review_level: {meta.get('review_level', 'unknown')}\n"
             f"- risk_flags: {meta.get('risk_flags', 'unknown')}\n"
-            f"- duplicate_candidate: {meta.get('duplicate_candidate', 'legacy_missing')}\n"
-            f"- similarity_score: {meta.get('similarity_score', 'legacy_missing')}\n"
-            f"- duplicate_of: {meta.get('duplicate_of', 'legacy_missing')}\n"
-            f"- duplicate_source_status: {meta.get('duplicate_source_status', 'legacy_missing')}\n"
+            f"- duplicate_candidate: {duplicate_meta.get('duplicate_candidate', 'false')}\n"
+            f"- similarity_score: {duplicate_meta.get('similarity_score', '0.00')}\n"
+            f"- duplicate_of: {duplicate_meta.get('duplicate_of', 'none')}\n"
+            f"- duplicate_source_status: {duplicate_meta.get('duplicate_source_status', 'none')}\n"
+            f"- duplicate_metadata_status: {duplicate_meta.get('duplicate_metadata_status', 'unknown')}\n"
             f"- mentioned_entities: {meta.get('mentioned_entities', 'unknown')}\n"
             f"- laid_entities: {meta.get('laid_entities', 'unknown')}\n\n"
             f"{body or '（空候选）'}"
