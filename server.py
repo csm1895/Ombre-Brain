@@ -313,6 +313,8 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "shared_travel_status",
     "shared_souvenir_add",
     "shared_souvenir_list",
+    "shared_travelogue_add",
+    "shared_travelogue_list",
     "shared_unread",
     "startup_bridge",
     "trace",
@@ -518,6 +520,27 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "experience_policy_whitelist": list(SHARED_TRAVEL_EXPERIENCE_POLICIES.keys()),
     },
     "shared_souvenir_list": {
+        "required": [],
+        "optional": ["limit", "traveler", "tag"],
+        "traveler_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+    },
+    "shared_travelogue_add": {
+        "required": ["title", "place", "narrative", "traveler"],
+        "optional": [
+            "scenes",
+            "souvenir_ids",
+            "source_url",
+            "source_title",
+            "experience_mode",
+            "experience_policy",
+            "tags",
+            "source",
+        ],
+        "traveler_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+        "experience_mode_whitelist": list(SHARED_TRAVEL_ALLOWED_MODES),
+        "experience_policy_whitelist": list(SHARED_TRAVEL_EXPERIENCE_POLICIES.keys()),
+    },
+    "shared_travelogue_list": {
         "required": [],
         "optional": ["limit", "traveler", "tag"],
         "traveler_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
@@ -785,6 +808,7 @@ def _shared_travel_empty_store() -> dict:
         "version": SHARED_TRAVEL_VERSION,
         "room": SHARED_TRAVEL_ROOM_NAME,
         "souvenirs": [],
+        "travelogues": [],
     }
 
 
@@ -795,6 +819,9 @@ def _shared_travel_load_store() -> dict:
     souvenirs = store.get("souvenirs")
     if not isinstance(souvenirs, list):
         store["souvenirs"] = []
+    travelogues = store.get("travelogues")
+    if not isinstance(travelogues, list):
+        store["travelogues"] = []
     store.setdefault("version", SHARED_TRAVEL_VERSION)
     store.setdefault("room", SHARED_TRAVEL_ROOM_NAME)
     return store
@@ -910,6 +937,65 @@ def _shared_travel_normalize_sensory(sensory) -> dict:
         if text:
             normalized[key] = text[:500]
     return normalized
+
+
+def _shared_travel_normalize_scene_list(scenes) -> list[dict]:
+    if scenes is None:
+        return []
+    data = scenes
+    if isinstance(scenes, str):
+        stripped = scenes.strip()
+        if not stripped:
+            return []
+        try:
+            data = json.loads(stripped)
+        except Exception:
+            data = [stripped]
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list):
+        return []
+    normalized = []
+    for idx, scene in enumerate(data[:12], start=1):
+        if isinstance(scene, dict):
+            text = str(scene.get("text") or scene.get("summary") or scene.get("scene") or "").strip()
+            if not text:
+                continue
+            normalized.append({
+                "index": int(scene.get("index") or idx),
+                "text": text[:500],
+                "sensory": _shared_travel_normalize_sensory(scene.get("sensory", {})),
+            })
+        else:
+            text = str(scene).strip()
+            if text:
+                normalized.append({"index": idx, "text": text[:500], "sensory": {}})
+    return normalized
+
+
+def _shared_travel_normalize_id_list(values) -> list[str]:
+    if values is None:
+        return []
+    raw_values = values
+    if isinstance(values, str):
+        stripped = values.strip()
+        if not stripped:
+            return []
+        try:
+            parsed = json.loads(stripped)
+            raw_values = parsed if isinstance(parsed, list) else stripped
+        except Exception:
+            raw_values = stripped
+    if isinstance(raw_values, str):
+        raw_values = raw_values.replace("，", ",").split(",")
+    if not isinstance(raw_values, list):
+        return []
+    normalized = []
+    for value in raw_values:
+        text = str(value).strip()
+        if text:
+            normalized.append(text[:120])
+    return list(dict.fromkeys(normalized))[:20]
 
 
 def _shared_channel_normalize_tags(tags) -> list[str]:
@@ -1050,8 +1136,16 @@ def _shared_space_status_payload() -> dict:
 def _shared_travel_status_payload() -> dict:
     store = _shared_travel_load_store()
     souvenirs = [item for item in store.get("souvenirs", []) if isinstance(item, dict)]
+    travelogues = [item for item in store.get("travelogues", []) if isinstance(item, dict)]
     by_traveler = {
         traveler: len([item for item in souvenirs if item.get("traveler") == traveler])
+        for traveler in SHARED_CHANNEL_ALLOWED_SENDERS
+    }
+    by_traveler_counts = {
+        traveler: {
+            "souvenirs": len([item for item in souvenirs if item.get("traveler") == traveler]),
+            "travelogues": len([item for item in travelogues if item.get("traveler") == traveler]),
+        }
         for traveler in SHARED_CHANNEL_ALLOWED_SENDERS
     }
     return {
@@ -1066,7 +1160,9 @@ def _shared_travel_status_payload() -> dict:
         "canonical_status_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/shared/travel/status",
         "storage_dir": _shared_travel_dir(),
         "souvenir_count": len(souvenirs),
+        "travelogue_count": len(travelogues),
         "by_traveler": by_traveler,
+        "by_traveler_counts": by_traveler_counts,
         "experience_modes": list(SHARED_TRAVEL_ALLOWED_MODES),
         "experience_policies": SHARED_TRAVEL_EXPERIENCE_POLICIES,
         "default_experience_policy_by_traveler": SHARED_TRAVEL_DEFAULT_POLICY_BY_TRAVELER,
@@ -1074,8 +1170,16 @@ def _shared_travel_status_payload() -> dict:
             "status": "/shared/travel/status",
             "add_souvenir": "/shared/travel/souvenir",
             "list_souvenirs": "/shared/travel/souvenirs",
+            "add_travelogue": "/shared/travel/travelogue",
+            "list_travelogues": "/shared/travel/travelogues",
         },
-        "mcp_tools": ["shared_travel_status", "shared_souvenir_add", "shared_souvenir_list"],
+        "mcp_tools": [
+            "shared_travel_status",
+            "shared_souvenir_add",
+            "shared_souvenir_list",
+            "shared_travelogue_add",
+            "shared_travelogue_list",
+        ],
         "boundaries": [
             "Travel entries are traceable experience records, not claims of physical AI travel.",
             "Generated travel can be emotionally immersive, but it must remain source-aware and reviewable.",
@@ -1304,6 +1408,71 @@ def _shared_souvenir_list(limit: int = 20, traveler: str = "", tag: str = "") ->
     return souvenirs[-limit:]
 
 
+async def _shared_travelogue_add(
+    title: str,
+    place: str,
+    narrative: str,
+    traveler: str,
+    scenes=None,
+    souvenir_ids=None,
+    source_url: str = "",
+    source_title: str = "",
+    experience_mode: str = "remote_source",
+    experience_policy: str = "",
+    tags=None,
+    source: str = "",
+) -> dict:
+    title = _shared_space_normalize_title(title)
+    place = _shared_space_normalize_title(place)
+    narrative = _shared_space_normalize_content(narrative)
+    traveler = _shared_channel_normalize_sender(traveler, "traveler")
+    experience_mode = _shared_travel_normalize_mode(experience_mode)
+    experience_policy = _shared_travel_normalize_policy(experience_policy, traveler)
+    scene_list = _shared_travel_normalize_scene_list(scenes)
+    souvenir_id_list = _shared_travel_normalize_id_list(souvenir_ids)
+    tag_list = list(dict.fromkeys(_shared_channel_normalize_tags(tags) + ["travelogue", experience_mode, experience_policy]))
+    source = (source or "").strip()[:80] or "unknown"
+
+    async with _shared_travel_lock:
+        store = _shared_travel_load_store()
+        now = datetime.now(CST)
+        travelogue = {
+            "id": f"travelogue_{now.strftime('%Y%m%d_%H%M%S_%f')}_{random.randint(1000, 9999)}",
+            "title": title,
+            "place": place,
+            "narrative": narrative,
+            "traveler": traveler,
+            "scenes": scene_list,
+            "souvenir_ids": souvenir_id_list,
+            "source_url": _shared_tech_card_normalize_url(source_url),
+            "source_title": (source_title or "").strip()[:160],
+            "experience_mode": experience_mode,
+            "experience_policy": experience_policy,
+            "tags": tag_list,
+            "created_at": now.isoformat(),
+            "display_room": SHARED_TRAVEL_ROOM_NAME,
+            "visibility": "shared_travel",
+            "source": source,
+        }
+        store["travelogues"].append(travelogue)
+        store["updated_at"] = now.isoformat()
+        _atomic_write_json(_shared_travel_souvenirs_path(), store)
+        return travelogue
+
+
+def _shared_travelogue_list(limit: int = 20, traveler: str = "", tag: str = "") -> list[dict]:
+    store = _shared_travel_load_store()
+    travelogues = [item for item in store.get("travelogues", []) if isinstance(item, dict)]
+    if traveler:
+        traveler = _shared_channel_normalize_sender(traveler, "traveler")
+        travelogues = [item for item in travelogues if item.get("traveler") == traveler]
+    if tag:
+        normalized_tag = tag.strip()
+        travelogues = [item for item in travelogues if normalized_tag in (item.get("tags") or [])]
+    limit = max(1, min(int(limit or 20), 100))
+    return travelogues[-limit:]
+
+
 def _shared_space_list_items(section: str = "", limit: int = 20, tag: str = "") -> list[dict]:
     store = _shared_space_load_store()
     items = [item for item in store.get("items", []) if isinstance(item, dict)]
@@ -1366,7 +1535,14 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
         "travel_souvenirs": {
             "status": _shared_travel_status_payload(),
             "recent_souvenirs": _shared_souvenir_list(limit=item_limit),
-            "tools": ["shared_travel_status", "shared_souvenir_add", "shared_souvenir_list"],
+            "recent_travelogues": _shared_travelogue_list(limit=item_limit),
+            "tools": [
+                "shared_travel_status",
+                "shared_souvenir_add",
+                "shared_souvenir_list",
+                "shared_travelogue_add",
+                "shared_travelogue_list",
+            ],
         },
         "boundaries": [
             "The living room is shared; private rooms remain separate.",
@@ -1866,6 +2042,12 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "state": "landed",
                 "evidence": "/shared/room/sensory/status plus shared_room_sensory_status/shared_room_sensory_update",
                 "why_it_matters": "The Moon Rose room can now expose sight/sound/felt channels for a frontend and future generated travel scenes.",
+            },
+            {
+                "id": "shared_travelogues_v1",
+                "state": "landed",
+                "evidence": "/shared/travel/travelogues plus shared_travelogue_add/shared_travelogue_list",
+                "why_it_matters": "A generated trip can keep a traceable story arc, scenes, and linked souvenirs instead of leaving only a loose object.",
             },
         ],
         "open_items": [
@@ -2984,6 +3166,62 @@ async def api_shared_travel_souvenirs(request):
         return JSONResponse({"error": str(e)}, status_code=400)
     _mark_system_event("shared_souvenir_list")
     return JSONResponse({"status": "ok", "souvenirs": souvenirs, "count": len(souvenirs)})
+
+
+@mcp.custom_route("/shared/travel/travelogue", methods=["POST"])
+async def api_shared_travel_travelogue(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+        travelogue = await _shared_travelogue_add(
+            body.get("title", ""),
+            body.get("place", ""),
+            body.get("narrative", ""),
+            body.get("traveler", ""),
+            scenes=body.get("scenes", []),
+            souvenir_ids=body.get("souvenir_ids", []),
+            source_url=body.get("source_url", ""),
+            source_title=body.get("source_title", ""),
+            experience_mode=body.get("experience_mode", "remote_source"),
+            experience_policy=body.get("experience_policy", ""),
+            tags=body.get("tags", []),
+            source=body.get("source", "http_shared_travelogue"),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.error(f"shared travelogue add failed: {e}")
+        return JSONResponse({"error": "shared travelogue add failed"}, status_code=500)
+    _mark_system_event("shared_travelogue_add")
+    return JSONResponse({"status": "ok", "travelogue": travelogue})
+
+
+@mcp.custom_route("/shared/travel/travelogues", methods=["GET", "POST"])
+async def api_shared_travel_travelogues(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    body = {}
+    if request.method == "POST":
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+    try:
+        limit = int(body.get("limit", request.query_params.get("limit", 20)))
+        travelogues = _shared_travelogue_list(
+            limit=limit,
+            traveler=str(body.get("traveler", request.query_params.get("traveler", "")) or ""),
+            tag=str(body.get("tag", request.query_params.get("tag", "")) or ""),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    _mark_system_event("shared_travelogue_list")
+    return JSONResponse({"status": "ok", "travelogues": travelogues, "count": len(travelogues)})
 
 
 # =============================================================
@@ -5619,6 +5857,54 @@ async def shared_souvenir_list(limit: int = 20, traveler: str = "", tag: str = "
         return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
     _mark_system_event("shared_souvenir_list")
     return json.dumps({"status": "ok", "souvenirs": souvenirs, "count": len(souvenirs)}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_travelogue_add(
+    title: str,
+    place: str,
+    narrative: str,
+    traveler: str,
+    scenes: str = "",
+    souvenir_ids: str = "",
+    source_url: str = "",
+    source_title: str = "",
+    experience_mode: str = "remote_source",
+    experience_policy: str = "",
+    tags: str = "",
+    source: str = "mcp_shared_travelogue",
+) -> str:
+    """添加旅行记录/游记；可关联场景片段、纪念品和体验边界。"""
+    try:
+        travelogue = await _shared_travelogue_add(
+            title,
+            place,
+            narrative,
+            traveler,
+            scenes=scenes,
+            souvenir_ids=souvenir_ids,
+            source_url=source_url,
+            source_title=source_title,
+            experience_mode=experience_mode,
+            experience_policy=experience_policy,
+            tags=tags,
+            source=source,
+        )
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_travelogue_add")
+    return json.dumps({"status": "ok", "travelogue": travelogue}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_travelogue_list(limit: int = 20, traveler: str = "", tag: str = "") -> str:
+    """读取旅行记录/游记，可按 traveler 或 tag 过滤；只读。"""
+    try:
+        travelogues = _shared_travelogue_list(limit=limit, traveler=traveler, tag=tag)
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_travelogue_list")
+    return json.dumps({"status": "ok", "travelogues": travelogues, "count": len(travelogues)}, ensure_ascii=False, indent=2)
 
 
 # =============================================================
