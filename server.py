@@ -103,7 +103,10 @@ def _runtime_storage_base() -> str:
 SHARED_CHANNEL_ALLOWED_SENDERS = ("yechenyi", "guyanshen", "system")
 SHARED_CHANNEL_VISIBILITY = "shared_tech"
 SHARED_CHANNEL_VERSION = "shared_channel_v1"
+SHARED_SPACE_VERSION = "shared_space_v1"
 SHARED_CHANNEL_MAX_CONTENT_CHARS = 4000
+SHARED_SPACE_MAX_CONTENT_CHARS = 8000
+SHARED_SPACE_ALLOWED_SECTIONS = ("tech_shelf", "house_rules", "shared_memory", "todo")
 SHARED_CHANNEL_CANONICAL_BASE_URL = os.environ.get(
     "OMBRE_SHARED_CHANNEL_CANONICAL_BASE_URL",
     "https://yechenyi.zeabur.app",
@@ -131,6 +134,7 @@ _runtime_ready = False
 _runtime_ready_last_ok = 0.0
 _runtime_ready_last_error = ""
 _shared_channel_lock = asyncio.Lock()
+_shared_space_lock = asyncio.Lock()
 
 RUNTIME_FEATURES = {
     "runtime_features_http_endpoint": True,
@@ -160,6 +164,10 @@ RUNTIME_FEATURES = {
     "shared_channel_sender_whitelist": True,
     "shared_channel_read_cursors": True,
     "shared_channel_atomic_json": True,
+    "shared_space_http_endpoints": True,
+    "shared_space_mcp_tools": True,
+    "shared_space_section_whitelist": True,
+    "shared_space_atomic_json": True,
     "associated_memory_after_writes": True,
     "associated_memory_shows_provenance": True,
     "hold_provenance_defaults": True,
@@ -198,6 +206,10 @@ RUNTIME_FEATURE_COMMITS = {
     "shared_channel_sender_whitelist": "self",
     "shared_channel_read_cursors": "self",
     "shared_channel_atomic_json": "self",
+    "shared_space_http_endpoints": "self",
+    "shared_space_mcp_tools": "self",
+    "shared_space_section_whitelist": "self",
+    "shared_space_atomic_json": "self",
     "associated_memory_after_writes": "4d93255",
     "hold_provenance_defaults": "926b92d",
     "associated_memory_shows_provenance": "c4448c8",
@@ -242,9 +254,12 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "set_iron_rule",
     "set_user_state",
     "shared_ack",
+    "shared_item_add",
+    "shared_item_list",
     "shared_post",
     "shared_read",
     "shared_reply",
+    "shared_space_status",
     "shared_status",
     "shared_unread",
     "startup_bridge",
@@ -395,6 +410,22 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "required": [],
         "optional": [],
     },
+    "shared_space_status": {
+        "required": [],
+        "optional": [],
+        "sections": list(SHARED_SPACE_ALLOWED_SECTIONS),
+    },
+    "shared_item_add": {
+        "required": ["section", "title", "content", "sender"],
+        "optional": ["tags", "source"],
+        "sender_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+        "section_whitelist": list(SHARED_SPACE_ALLOWED_SECTIONS),
+    },
+    "shared_item_list": {
+        "required": [],
+        "optional": ["section", "limit", "tag"],
+        "section_whitelist": list(SHARED_SPACE_ALLOWED_SECTIONS),
+    },
 }
 RUNTIME_UPSTREAM_WATCH_ITEMS = [
     {
@@ -503,6 +534,14 @@ def _shared_channel_cursors_path() -> str:
     return os.path.join(_shared_channel_dir(), "read_cursors.json")
 
 
+def _shared_space_dir() -> str:
+    return os.path.join(_runtime_storage_base(), "shared_space")
+
+
+def _shared_space_items_path() -> str:
+    return os.path.join(_shared_space_dir(), "items.json")
+
+
 def _shared_channel_auth_token() -> str:
     return (
         os.environ.get("OMBRE_SHARED_CHANNEL_TOKEN")
@@ -577,6 +616,26 @@ def _shared_channel_load_cursors() -> dict:
     return cursors if isinstance(cursors, dict) else {}
 
 
+def _shared_space_empty_store() -> dict:
+    return {
+        "version": SHARED_SPACE_VERSION,
+        "visibility": "shared_room",
+        "items": [],
+    }
+
+
+def _shared_space_load_store() -> dict:
+    store = _read_json_file(_shared_space_items_path(), _shared_space_empty_store())
+    if not isinstance(store, dict):
+        store = _shared_space_empty_store()
+    items = store.get("items")
+    if not isinstance(items, list):
+        store["items"] = []
+    store.setdefault("version", SHARED_SPACE_VERSION)
+    store.setdefault("visibility", "shared_room")
+    return store
+
+
 def _shared_channel_normalize_sender(sender: str, field_name: str = "sender") -> str:
     normalized = (sender or "").strip().lower()
     if normalized not in SHARED_CHANNEL_ALLOWED_SENDERS:
@@ -592,6 +651,30 @@ def _shared_channel_normalize_content(content: str) -> str:
     if len(normalized) > SHARED_CHANNEL_MAX_CONTENT_CHARS:
         raise ValueError(f"content is too long; max {SHARED_CHANNEL_MAX_CONTENT_CHARS} chars")
     return normalized
+
+
+def _shared_space_normalize_content(content: str) -> str:
+    normalized = (content or "").strip()
+    if not normalized:
+        raise ValueError("content is required")
+    if len(normalized) > SHARED_SPACE_MAX_CONTENT_CHARS:
+        raise ValueError(f"content is too long; max {SHARED_SPACE_MAX_CONTENT_CHARS} chars")
+    return normalized
+
+
+def _shared_space_normalize_section(section: str) -> str:
+    normalized = (section or "").strip().lower()
+    if normalized not in SHARED_SPACE_ALLOWED_SECTIONS:
+        allowed = ", ".join(SHARED_SPACE_ALLOWED_SECTIONS)
+        raise ValueError(f"section must be one of: {allowed}")
+    return normalized
+
+
+def _shared_space_normalize_title(title: str) -> str:
+    normalized = (title or "").strip()
+    if not normalized:
+        raise ValueError("title is required")
+    return normalized[:120]
 
 
 def _shared_channel_normalize_tags(tags) -> list[str]:
@@ -687,6 +770,93 @@ def _shared_channel_status_payload() -> dict:
             "Messages do not automatically write to Yechenyi or Guyanshen main brain memory.",
         ],
     }
+
+
+def _shared_space_status_payload() -> dict:
+    store = _shared_space_load_store()
+    items = [item for item in store.get("items", []) if isinstance(item, dict)]
+    section_counts = {
+        section: len([item for item in items if item.get("section") == section])
+        for section in SHARED_SPACE_ALLOWED_SECTIONS
+    }
+    return {
+        "status": "ok",
+        "version": SHARED_SPACE_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "shared_space_only",
+        "main_brain_write": False,
+        "canonical_base_url": SHARED_CHANNEL_CANONICAL_BASE_URL,
+        "canonical_mcp_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/mcp",
+        "canonical_status_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/shared/space/status",
+        "storage_dir": _shared_space_dir(),
+        "item_count": len(items),
+        "section_counts": section_counts,
+        "sections": {
+            "tech_shelf": "Shared technical references, tutorials, external post summaries, and reusable engineering lessons.",
+            "house_rules": "Shared-space boundaries and operating rules visible to Qianqian, Yechenyi, and Guyanshen.",
+            "shared_memory": "Common memories all three can know; not Yechenyi private memory and not Guyanshen private memory.",
+            "todo": "Shared follow-ups for the living-room space, frontend, gateway, deployment, and coordination.",
+        },
+        "endpoints": {
+            "status": "/shared/space/status",
+            "add_item": "/shared/space/item",
+            "list_items": "/shared/space/items",
+        },
+        "mcp_tools": ["shared_space_status", "shared_item_add", "shared_item_list"],
+        "boundaries": [
+            "Shared space items do not automatically write to any private hippocampus.",
+            "Do not store private intimate content, secrets, tokens, passwords, cookies, billing, or account identifiers.",
+            "Promote an item into a private brain only by that brain's own explicit tool or review flow.",
+        ],
+    }
+
+
+async def _shared_space_add_item(
+    section: str,
+    title: str,
+    content: str,
+    sender: str,
+    tags=None,
+    source: str = "",
+) -> dict:
+    section = _shared_space_normalize_section(section)
+    sender = _shared_channel_normalize_sender(sender)
+    title = _shared_space_normalize_title(title)
+    content = _shared_space_normalize_content(content)
+    tag_list = _shared_channel_normalize_tags(tags)
+    source = (source or "").strip()[:80] or "unknown"
+
+    async with _shared_space_lock:
+        store = _shared_space_load_store()
+        now = datetime.now(CST)
+        item = {
+            "id": f"item_{now.strftime('%Y%m%d_%H%M%S_%f')}_{random.randint(1000, 9999)}",
+            "section": section,
+            "title": title,
+            "content": content,
+            "sender": sender,
+            "tags": tag_list,
+            "created_at": now.isoformat(),
+            "visibility": "shared_room",
+            "source": source,
+        }
+        store["items"].append(item)
+        store["updated_at"] = now.isoformat()
+        _atomic_write_json(_shared_space_items_path(), store)
+        return item
+
+
+def _shared_space_list_items(section: str = "", limit: int = 20, tag: str = "") -> list[dict]:
+    store = _shared_space_load_store()
+    items = [item for item in store.get("items", []) if isinstance(item, dict)]
+    if section:
+        section = _shared_space_normalize_section(section)
+        items = [item for item in items if item.get("section") == section]
+    if tag:
+        normalized_tag = tag.strip()
+        items = [item for item in items if normalized_tag in (item.get("tags") or [])]
+    limit = max(1, min(int(limit or 20), 100))
+    return items[-limit:]
 
 
 async def _shared_channel_post_message(
@@ -1149,6 +1319,12 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "evidence": "/shared/channel/status plus shared_post/read/reply/unread/ack/status",
                 "why_it_matters": "Yechenyi and Guyanshen can share a technical living-room wall without merging their private rooms.",
             },
+            {
+                "id": "shared_space_v1",
+                "state": "landed",
+                "evidence": "/shared/space/status plus shared_item_add/shared_item_list/shared_space_status",
+                "why_it_matters": "The living room now has a technical shelf, house rules, shared memory, and todo shelves for a future frontend.",
+            },
         ],
         "open_items": [
             {
@@ -1374,6 +1550,7 @@ def _runtime_diagnostics_payload() -> dict:
             "upgrade_backlog": "/api/runtime/upgrade-backlog",
             "source_routes": "/api/runtime/source-routes",
             "shared_channel_status": "/shared/channel/status",
+            "shared_space_status": "/shared/space/status",
         },
         "decision_tree": [
             "If diagnostics git_sha is old, deployment has not reached the running container yet.",
@@ -2068,6 +2245,63 @@ async def api_shared_channel_ack(request):
         return JSONResponse({"error": "shared channel ack failed"}, status_code=500)
     _mark_system_event("shared_channel_ack")
     return JSONResponse(result)
+
+
+@mcp.custom_route("/shared/space/status", methods=["GET"])
+async def api_shared_space_status(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(_shared_space_status_payload())
+
+
+@mcp.custom_route("/shared/space/item", methods=["POST"])
+async def api_shared_space_item(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+        item = await _shared_space_add_item(
+            body.get("section", ""),
+            body.get("title", ""),
+            body.get("content", ""),
+            body.get("sender", ""),
+            tags=body.get("tags", []),
+            source=body.get("source", "http_shared_space"),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.error(f"shared space item add failed: {e}")
+        return JSONResponse({"error": "shared space item add failed"}, status_code=500)
+    _mark_system_event("shared_space_item_add")
+    return JSONResponse({"status": "ok", "item": item})
+
+
+@mcp.custom_route("/shared/space/items", methods=["GET", "POST"])
+async def api_shared_space_items(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    body = {}
+    if request.method == "POST":
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+    try:
+        limit = int(body.get("limit", request.query_params.get("limit", 20)))
+        items = _shared_space_list_items(
+            section=str(body.get("section", request.query_params.get("section", "")) or ""),
+            limit=limit,
+            tag=str(body.get("tag", request.query_params.get("tag", "")) or ""),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    _mark_system_event("shared_space_item_list")
+    return JSONResponse({"status": "ok", "items": items, "count": len(items)})
 
 
 # =============================================================
@@ -4540,6 +4774,42 @@ async def shared_ack(reader: str, message_id: str = "") -> str:
         return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
     _mark_system_event("shared_ack")
     return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_space_status() -> str:
+    """读取镜像客厅共享空间状态：技术书架、家规、共享记忆、待办；只读。"""
+    _mark_system_event("shared_space_status")
+    return json.dumps(_shared_space_status_payload(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_item_add(
+    section: str,
+    title: str,
+    content: str,
+    sender: str,
+    tags: str = "",
+    source: str = "mcp_shared_space",
+) -> str:
+    """向共享空间添加条目；section 只允许 tech_shelf/house_rules/shared_memory/todo。"""
+    try:
+        item = await _shared_space_add_item(section, title, content, sender, tags=tags, source=source)
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_item_add")
+    return json.dumps({"status": "ok", "item": item}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_item_list(section: str = "", limit: int = 20, tag: str = "") -> str:
+    """读取共享空间条目，可按 section 或 tag 过滤；只读。"""
+    try:
+        items = _shared_space_list_items(section=section, limit=limit, tag=tag)
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_item_list")
+    return json.dumps({"status": "ok", "items": items, "count": len(items)}, ensure_ascii=False, indent=2)
 
 
 # =============================================================
