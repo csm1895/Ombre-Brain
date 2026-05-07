@@ -112,6 +112,7 @@ SHARED_CHANNEL_VERSION = "shared_channel_v1"
 SHARED_SPACE_VERSION = "shared_space_v1"
 SHARED_TRAVEL_VERSION = "shared_travel_v1"
 SHARED_ROOM_SENSORY_VERSION = "shared_room_sensory_v1"
+SHARED_ROOM_SENSORY_AUTO_VERSION = "shared_room_sensory_auto_v1"
 SHARED_ROOM_ENVIRONMENT_VERSION = "shared_room_environment_v1"
 SHARED_ROOM_BRIEF_VERSION = "shared_room_brief_v1"
 SHARED_ROOM_SEARCH_VERSION = "shared_room_search_v1"
@@ -307,7 +308,7 @@ RUNTIME_FEATURES = {
     "cadence_shared_runtime_isolation": True,
     "diary_review_duplicate_detection": True,
 }
-RUNTIME_FEATURES_VERSION = "2026-05-07.shared-room-presence-v1"
+RUNTIME_FEATURES_VERSION = "2026-05-07.shared-room-auto-sensory-hourly-v1"
 RUNTIME_FEATURE_COMMITS = {
     "runtime_features_http_endpoint": "a4528ec",
     "runtime_features_mcp_tool": "self",
@@ -1712,12 +1713,104 @@ def _shared_travel_status_payload() -> dict:
     }
 
 
-def _shared_room_sensory_status_payload() -> dict:
+def _shared_room_sensory_manual_state(current: dict, now: datetime) -> dict:
+    if not isinstance(current, dict):
+        return {
+            "mode": "empty",
+            "is_initial_empty": True,
+            "is_stale": True,
+            "age_minutes": None,
+            "stale_after_minutes": 60,
+        }
+    source = str(current.get("source") or "")
+    updated_at = str(current.get("updated_at") or "")
+    is_initial = source == "initial_empty_room" or not updated_at
+    parsed = None
+    if updated_at:
+        try:
+            parsed = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+        except Exception:
+            parsed = None
+    age_minutes = None
+    if parsed is not None:
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=CST)
+        age_minutes = max(0, int((now - parsed.astimezone(CST)).total_seconds() // 60))
+    stale_after = 60
+    is_stale = is_initial or age_minutes is None or age_minutes >= stale_after
+    return {
+        "mode": "manual_override" if not is_initial else "initial_empty",
+        "is_initial_empty": is_initial,
+        "is_stale": is_stale,
+        "age_minutes": age_minutes,
+        "stale_after_minutes": stale_after,
+    }
+
+
+def _shared_room_auto_sensory_current(environment: dict) -> dict:
+    environment = environment if isinstance(environment, dict) else {}
+    now = environment.get("time_source", {}).get("now") or datetime.now(CST).isoformat()
+    day_phase = environment.get("day_phase") if isinstance(environment.get("day_phase"), dict) else {}
+    season = environment.get("season") if isinstance(environment.get("season"), dict) else {}
+    weather = environment.get("weather") if isinstance(environment.get("weather"), dict) else {}
+    weather_current = weather.get("current") if isinstance(weather.get("current"), dict) else {}
+    atmosphere = environment.get("atmosphere") if isinstance(environment.get("atmosphere"), dict) else {}
+
+    phase_label = day_phase.get("label") or "当前时段"
+    weather_label = weather_current.get("weather_label") or ("杭州天气已连接" if weather.get("connected") else "杭州天气暂未连接")
+    temperature = weather_current.get("temperature_c")
+    temp_text = f"{temperature}°C" if temperature is not None else ""
+    weather_text = "，".join(part for part in [weather_label, temp_text] if part)
+
+    sight = " ".join(part for part in [
+        atmosphere.get("sight", ""),
+        f"客厅按{phase_label}自动换光；落地窗边的海玻璃会跟着天光变亮或变深。",
+        f"大门外院子状态：{season.get('garden', '')}",
+    ] if part).strip()
+    sound = " ".join(part for part in [
+        atmosphere.get("sound", ""),
+        "如果前端打开体感层，可以把这段作为当前房间底噪，而不用人工重写。",
+    ] if part).strip()
+    felt = " ".join(part for part in [
+        atmosphere.get("felt", ""),
+        f"自动锚点：北京时间、{season.get('label', '季节')}、{phase_label}、{weather_text}。",
+    ] if part).strip()
+
+    return {
+        "context": "room",
+        "sight": sight[:500],
+        "sound": sound[:500],
+        "felt": felt[:500],
+        "updated_by": "system_auto_environment",
+        "updated_at": now,
+        "source": "computed_from_shared_room_environment",
+        "derived_from_environment": True,
+        "version": SHARED_ROOM_SENSORY_AUTO_VERSION,
+        "inputs": {
+            "day_phase": day_phase.get("id", ""),
+            "day_phase_label": phase_label,
+            "season": season.get("id", ""),
+            "season_label": season.get("label", ""),
+            "weather_connected": bool(weather.get("connected")),
+            "weather_label": weather_label,
+            "temperature_c": temperature,
+        },
+    }
+
+
+def _shared_room_sensory_status_payload(environment: dict = None) -> dict:
     store = _shared_room_sensory_load_store()
+    now = datetime.now(CST)
+    environment_payload = environment if isinstance(environment, dict) else _shared_room_environment_payload()
+    manual_current = store.get("current", {})
+    manual_state = _shared_room_sensory_manual_state(manual_current, now)
+    auto_current = _shared_room_auto_sensory_current(environment_payload)
+    effective_current = auto_current if manual_state.get("is_stale") else manual_current
     recent_souvenirs = _shared_souvenir_list(limit=6)
     return {
         "status": "ok",
         "version": SHARED_ROOM_SENSORY_VERSION,
+        "auto_version": SHARED_ROOM_SENSORY_AUTO_VERSION,
         "git_sha": _runtime_git_sha(),
         "write_scope": "shared_room_sensory_only",
         "main_brain_write": False,
@@ -1726,7 +1819,19 @@ def _shared_room_sensory_status_payload() -> dict:
         "canonical_mcp_url": SHARED_ONLY_MCP_URL,
         "canonical_status_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/shared/room/sensory/status",
         "storage_dir": _shared_room_dir(),
-        "current": store.get("current", {}),
+        "current": manual_current,
+        "manual_current": manual_current,
+        "manual_state": manual_state,
+        "auto_current": auto_current,
+        "effective_current": effective_current,
+        "effective_source": "auto_current" if manual_state.get("is_stale") else "manual_current",
+        "auto_update": {
+            "enabled": True,
+            "mode": "read_time_computed",
+            "writes_json": False,
+            "source_endpoint": "/shared/room/environment",
+            "note": "Frontend and agents should prefer effective_current; manual sensory remains available as a temporary override.",
+        },
         "history_count": len([item for item in store.get("history", []) if isinstance(item, dict)]),
         "visible_souvenirs": [
             {
@@ -1743,6 +1848,7 @@ def _shared_room_sensory_status_payload() -> dict:
         "endpoints": {
             "status": "/shared/room/sensory/status",
             "update": "/shared/room/sensory",
+            "environment_source": "/shared/room/environment",
         },
         "mcp_tools": ["shared_room_sensory_status", "shared_room_sensory_update"],
         "boundaries": [
@@ -3162,6 +3268,7 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
         section: _shared_space_list_items(section=section, limit=item_limit)
         for section in SHARED_SPACE_ALLOWED_SECTIONS
     }
+    environment = _shared_room_environment_payload()
     return {
         "status": "ok",
         "version": "shared_room_snapshot_v1",
@@ -3195,11 +3302,11 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
             "tools": ["shared_space_status", "shared_item_add", "shared_item_list", "shared_tech_card_add"],
         },
         "room_environment": {
-            "status": _shared_room_environment_payload(),
+            "status": environment,
             "tools": ["shared_room_environment"],
         },
         "room_sensory": {
-            "status": _shared_room_sensory_status_payload(),
+            "status": _shared_room_sensory_status_payload(environment=environment),
             "tools": ["shared_room_sensory_status", "shared_room_sensory_update"],
         },
         "room_presence": {
@@ -3253,7 +3360,7 @@ def _shared_room_brief_payload(wall_limit: int = 5, item_limit: int = 5) -> dict
     wall_messages = _shared_channel_visible_messages(channel_store, limit=wall_limit)
     space_status = _shared_space_status_payload()
     environment = _shared_room_environment_payload()
-    sensory = _shared_room_sensory_status_payload()
+    sensory = _shared_room_sensory_status_payload(environment=environment)
     pet = _shared_pet_status_payload()
     presence = _shared_room_presence_status_payload(limit=item_limit)
     travel = _shared_travel_status_payload()
@@ -3305,7 +3412,9 @@ def _shared_room_brief_payload(wall_limit: int = 5, item_limit: int = 5) -> dict
             "item_count": space_status.get("item_count", 0),
         },
         "room": {
-            "sensory_current": sensory.get("current", {}),
+            "sensory_current": sensory.get("effective_current", sensory.get("current", {})),
+            "sensory_effective_source": sensory.get("effective_source", ""),
+            "sensory_auto_update": sensory.get("auto_update", {}),
             "current_presence": presence.get("current_presence", {}),
             "recent_presence_events": presence.get("events", []),
             "display_zones": [
