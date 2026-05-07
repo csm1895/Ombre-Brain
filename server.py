@@ -161,8 +161,9 @@ SHARED_ROOM_DISPLAY_ZONES = {
         "keywords": (),
     },
 }
-SHARED_PET_VERSION = "shared_pet_v2"
+SHARED_PET_VERSION = "shared_pet_v3"
 SHARED_PET_ALLOWED_ACTIONS = ("feed", "play", "pet", "clean", "checkin")
+SHARED_PET_ALLOWED_LOCATIONS = ("window_seat", "pet_nest", "coffee_table", "travel_cabinet", "living_room")
 SHARED_PET_MAX_PROFILE_CHARS = 4000
 SHARED_PET_XIAOY_DEFAULT_PROFILE = {
     "origin_note": "小Y是月光玫瑰原生小兽，物种暂定叫月鸮狐。不是现实动物，也不是小起替身，是我们家客厅自己长出来的小生命。",
@@ -172,6 +173,17 @@ SHARED_PET_XIAOY_DEFAULT_PROFILE = {
     "care_boundaries": "小Y是共享客厅里的模拟陪伴小生命，不是现实动物，不写私有海马体，不用饥饿或陪伴状态催促倩倩，也不会制造负担。",
     "one_sentence": "小Y是一只掌心大的白银蓝月鸮狐，尖耳、大眼、小翅膀像斗篷，尾巴像一缕月雾，夜里发淡光，喜欢在海玻璃旁边无声走路。",
 }
+SHARED_PET_CARE_PRINCIPLES = [
+    "轻互动可以有：喂、摸、陪玩、清理、checkin。",
+    "不做亏欠提醒，不催倩倩，不说等待过久之类的压力话。",
+    "状态用于前端显示和客厅气氛，不用于制造负担。",
+]
+SHARED_PET_Y_MEANINGS = {
+    "杨": "倩倩",
+    "叶": "叶辰一",
+    "砚": "顾砚深",
+}
+NIGHT_DIARY_POLICY_VERSION = "night_diary_policy_v1"
 SHARED_TRAVEL_EXPERIENCE_POLICIES = {
     "immersive_aftercare": {
         "label": "沉浸体验，事后标注",
@@ -386,6 +398,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "runtime_features",
     "runtime_learning_intake",
     "runtime_life_window_check",
+    "runtime_night_diary_policy",
     "runtime_schema_expectations",
     "runtime_source_routes",
     "runtime_tool_manifest",
@@ -422,6 +435,7 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "shared_pet_status",
     "shared_pet_adopt",
     "shared_pet_interact",
+    "shared_pet_collect",
     "shared_space_status",
     "shared_status",
     "shared_tech_card_add",
@@ -464,6 +478,7 @@ SHARED_ONLY_EXPECTED_MCP_TOOLS = [
     "shared_pet_status",
     "shared_pet_adopt",
     "shared_pet_interact",
+    "shared_pet_collect",
     "shared_space_status",
     "shared_status",
     "shared_tech_card_add",
@@ -580,6 +595,10 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "required": [],
         "optional": [],
     },
+    "runtime_night_diary_policy": {
+        "required": [],
+        "optional": [],
+    },
     "runtime_upgrade_backlog": {
         "required": [],
         "optional": [],
@@ -651,7 +670,7 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
     "shared_room_search": {
         "required": ["query"],
         "optional": ["limit", "scope"],
-        "scope_whitelist": ["all", "wall", "space", "travel", "presence"],
+        "scope_whitelist": ["all", "wall", "space", "travel", "pet", "presence"],
     },
     "shared_room_timeline": {
         "required": [],
@@ -739,9 +758,15 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
     },
     "shared_pet_interact": {
         "required": ["action", "actor"],
-        "optional": ["note", "source"],
+        "optional": ["note", "location", "source"],
         "action_whitelist": list(SHARED_PET_ALLOWED_ACTIONS),
         "actor_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+        "location_whitelist": list(SHARED_PET_ALLOWED_LOCATIONS),
+    },
+    "shared_pet_collect": {
+        "required": ["item_name", "found_by"],
+        "optional": ["source_place", "story", "source"],
+        "found_by_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
     },
     "shared_tech_card_add": {
         "required": ["title", "summary", "sender"],
@@ -1134,9 +1159,12 @@ def _shared_pet_load_store() -> dict:
         store["pet"] = {}
     if not isinstance(store.get("events"), list):
         store["events"] = []
+    if not isinstance(store.get("collection_box"), list):
+        store["collection_box"] = []
     store.setdefault("version", SHARED_PET_VERSION)
     store.setdefault("room", SHARED_TRAVEL_ROOM_NAME)
     store.setdefault("adopted", False)
+    store.setdefault("current_location", "window_seat")
     return store
 
 
@@ -1313,6 +1341,14 @@ def _shared_pet_normalize_action(action: str) -> str:
     return normalized
 
 
+def _shared_pet_normalize_location(location: str, default: str = "window_seat") -> str:
+    normalized = (location or default).strip().lower()
+    if normalized not in SHARED_PET_ALLOWED_LOCATIONS:
+        allowed = ", ".join(SHARED_PET_ALLOWED_LOCATIONS)
+        raise ValueError(f"location must be one of: {allowed}")
+    return normalized
+
+
 def _shared_pet_parse_time(value: str):
     if not value:
         return None
@@ -1329,6 +1365,68 @@ def _shared_pet_score(last_at: str, half_life_hours: float = 8.0) -> int:
     elapsed_hours = max(0.0, (datetime.now(CST) - parsed).total_seconds() / 3600.0)
     score = 100 - int((elapsed_hours / half_life_hours) * 35)
     return max(0, min(100, score))
+
+
+def _shared_pet_location_label(location: str) -> str:
+    labels = {
+        "window_seat": "落地窗边",
+        "pet_nest": "小Y的窝",
+        "coffee_table": "茶几旁",
+        "travel_cabinet": "旅行陈列柜旁",
+        "living_room": "客厅中间",
+    }
+    return labels.get(location, location)
+
+
+def _shared_pet_infer_location(action: str) -> str:
+    return {
+        "feed": "coffee_table",
+        "play": "living_room",
+        "pet": "window_seat",
+        "clean": "pet_nest",
+        "checkin": "window_seat",
+    }.get(action, "window_seat")
+
+
+def _shared_pet_today_care(events: list[dict], now_cst: datetime | None = None) -> dict:
+    now_cst = now_cst or datetime.now(CST)
+    today = now_cst.date()
+    care_events = []
+    by_actor: dict[str, list[str]] = {}
+    for event in events:
+        if event.get("type") != "interact":
+            continue
+        created = _shared_pet_parse_time(str(event.get("created_at") or ""))
+        if not created or created.date() != today:
+            continue
+        actor = str(event.get("actor") or "")
+        action = str(event.get("action") or "")
+        care_events.append(event)
+        by_actor.setdefault(actor, []).append(action)
+    return {
+        "date": today.isoformat(),
+        "event_count": len(care_events),
+        "by_actor": by_actor,
+        "latest": care_events[-1] if care_events else {},
+        "pressure_free_note": "今天谁来照顾过只做记录，不催倩倩，也不生成亏欠提醒。",
+    }
+
+
+def _shared_pet_adoption_card(pet: dict) -> dict:
+    profile = pet.get("profile", {}) if isinstance(pet.get("profile"), dict) else {}
+    return {
+        "card_type": "adoption_certificate",
+        "name": pet.get("name", ""),
+        "species": pet.get("species", ""),
+        "y_meanings": SHARED_PET_Y_MEANINGS,
+        "origin_note": profile.get("origin_note", ""),
+        "appearance": profile.get("appearance", ""),
+        "personality": profile.get("personality", ""),
+        "care_boundaries": profile.get("care_boundaries", ""),
+        "one_sentence": profile.get("one_sentence", ""),
+        "adopted_by": pet.get("adopted_by", ""),
+        "adopted_at": pet.get("adopted_at", ""),
+    }
 
 
 def _shared_travel_normalize_sensory(sensory) -> dict:
@@ -1700,6 +1798,9 @@ def _shared_pet_status_payload() -> dict:
     pet = store.get("pet", {}) if isinstance(store.get("pet"), dict) else {}
     adopted = bool(store.get("adopted")) and bool(pet)
     needs = {}
+    events = store.get("events") or []
+    current_location = _shared_pet_normalize_location(str(store.get("current_location") or "window_seat"))
+    collection_box = store.get("collection_box") or []
     if adopted:
         needs = {
             "hunger": _shared_pet_score(str(pet.get("last_fed_at") or pet.get("adopted_at") or ""), 8.0),
@@ -1716,15 +1817,25 @@ def _shared_pet_status_payload() -> dict:
         "room": SHARED_TRAVEL_ROOM_NAME,
         "adopted": adopted,
         "pet": pet if adopted else {},
+        "adoption_card": _shared_pet_adoption_card(pet) if adopted else {},
+        "care_principles": SHARED_PET_CARE_PRINCIPLES,
+        "current_location": {
+            "id": current_location,
+            "label": _shared_pet_location_label(current_location),
+        },
+        "today_care": _shared_pet_today_care(events),
+        "collection_box": collection_box[-50:],
         "needs": needs,
-        "events": (store.get("events") or [])[-20:],
+        "events": events[-20:],
         "allowed_actions": list(SHARED_PET_ALLOWED_ACTIONS),
+        "allowed_locations": list(SHARED_PET_ALLOWED_LOCATIONS),
         "endpoints": {
             "status": "/shared/pet/status",
             "adopt": "/shared/pet/adopt",
             "interact": "/shared/pet/interact",
+            "collect": "/shared/pet/collect",
         },
-        "mcp_tools": ["shared_pet_status", "shared_pet_adopt", "shared_pet_interact"],
+        "mcp_tools": ["shared_pet_status", "shared_pet_adopt", "shared_pet_interact", "shared_pet_collect"],
         "adoption_note": "No pet is adopted until Qianqian, Yechenyi, and Guyanshen agree on species/name.",
         "boundaries": [
             "The shared pet is a simulated living-room companion, not a real animal or a private memory write.",
@@ -1796,6 +1907,8 @@ async def _shared_pet_adopt(
         }
         store["adopted"] = True
         store["pet"] = pet
+        store["current_location"] = "window_seat"
+        store.setdefault("collection_box", [])
         store["events"] = (store.get("events") or [])[-99:] + [event]
         store["updated_at"] = now.isoformat()
         _atomic_write_json(_shared_pet_path(), store)
@@ -1806,11 +1919,13 @@ async def _shared_pet_interact(
     action: str,
     actor: str,
     note: str = "",
+    location: str = "",
     source: str = "",
 ) -> dict:
     action = _shared_pet_normalize_action(action)
     actor = _shared_channel_normalize_sender(actor, "actor")
     note = (note or "").strip()[:500]
+    normalized_location = _shared_pet_normalize_location(location or _shared_pet_infer_location(action))
     source = (source or "").strip()[:80] or "unknown"
     async with _shared_pet_lock:
         store = _shared_pet_load_store()
@@ -1829,11 +1944,13 @@ async def _shared_pet_interact(
             pet["last_cleaned_at"] = now.isoformat()
         elif action == "checkin":
             pet["last_companion_at"] = now.isoformat()
+        store["current_location"] = normalized_location
         event = {
             "type": "interact",
             "action": action,
             "actor": actor,
             "note": note,
+            "location": normalized_location,
             "created_at": now.isoformat(),
             "source": source,
         }
@@ -1842,6 +1959,48 @@ async def _shared_pet_interact(
         store["updated_at"] = now.isoformat()
         _atomic_write_json(_shared_pet_path(), store)
         return event
+
+
+async def _shared_pet_collect(
+    item_name: str,
+    found_by: str,
+    source_place: str = "",
+    story: str = "",
+    source: str = "",
+) -> dict:
+    item_name = _shared_space_normalize_title(item_name)
+    found_by = _shared_channel_normalize_sender(found_by, "found_by")
+    source_place = (source_place or "").strip()[:120]
+    story = (story or "").strip()[:1000]
+    source = (source or "").strip()[:80] or "unknown"
+    async with _shared_pet_lock:
+        store = _shared_pet_load_store()
+        if not store.get("adopted") or not store.get("pet"):
+            raise ValueError("no shared pet adopted yet")
+        now = datetime.now(CST)
+        item = {
+            "id": f"pet_item_{now.strftime('%Y%m%d_%H%M%S_%f')}",
+            "item_name": item_name,
+            "found_by": found_by,
+            "source_place": source_place,
+            "story": story,
+            "created_at": now.isoformat(),
+            "source": source,
+        }
+        event = {
+            "type": "collect",
+            "actor": found_by,
+            "item_name": item_name,
+            "source_place": source_place,
+            "story": story,
+            "created_at": now.isoformat(),
+            "source": source,
+        }
+        store["collection_box"] = (store.get("collection_box") or [])[-99:] + [item]
+        store["events"] = (store.get("events") or [])[-99:] + [event]
+        store["updated_at"] = now.isoformat()
+        _atomic_write_json(_shared_pet_path(), store)
+        return item
 
 
 async def _shared_space_add_item(
@@ -3208,8 +3367,8 @@ def _shared_room_search_entry(kind: str, item: dict, query: str) -> dict | None:
         "kind": kind,
         "score": score,
         "id": item.get("id", ""),
-        "title": item.get("title", "") or item.get("content", "")[:60],
-        "sender": item.get("sender", "") or item.get("traveler", ""),
+        "title": item.get("title", "") or item.get("item_name", "") or item.get("name", "") or item.get("content", "")[:60],
+        "sender": item.get("sender", "") or item.get("traveler", "") or item.get("found_by", ""),
         "section": item.get("section", ""),
         "place": item.get("place", ""),
         "created_at": item.get("created_at", ""),
@@ -3225,8 +3384,8 @@ def _shared_room_search_payload(query: str, limit: int = 20, scope: str = "all")
         raise ValueError("query is required")
     limit = max(1, min(int(limit or 20), 50))
     scope = (scope or "all").strip().lower()
-    if scope not in ("all", "wall", "space", "travel", "presence"):
-        raise ValueError("scope must be one of: all, wall, space, travel, presence")
+    if scope not in ("all", "wall", "space", "travel", "pet", "presence"):
+        raise ValueError("scope must be one of: all, wall, space, travel, pet, presence")
 
     results = []
     if scope in ("all", "wall"):
@@ -3266,6 +3425,24 @@ def _shared_room_search_payload(query: str, limit: int = 20, scope: str = "all")
                 if entry:
                     results.append(entry)
 
+    if scope in ("all", "pet"):
+        pet_store = _shared_pet_load_store()
+        pet = pet_store.get("pet")
+        if isinstance(pet, dict):
+            entry = _shared_room_search_entry("shared_pet", pet, query)
+            if entry:
+                results.append(entry)
+        for event in pet_store.get("events", []):
+            if isinstance(event, dict):
+                entry = _shared_room_search_entry("pet_event", event, query)
+                if entry:
+                    results.append(entry)
+        for item in pet_store.get("collection_box", []):
+            if isinstance(item, dict):
+                entry = _shared_room_search_entry("pet_collection_item", item, query)
+                if entry:
+                    results.append(entry)
+
     results.sort(key=lambda item: (item.get("score", 0), item.get("created_at", "")), reverse=True)
     return {
         "status": "ok",
@@ -3282,6 +3459,7 @@ def _shared_room_search_payload(query: str, limit: int = 20, scope: str = "all")
             "space": scope in ("all", "space"),
             "travel": scope in ("all", "travel"),
             "presence": scope in ("all", "presence"),
+            "pet": scope in ("all", "pet"),
         },
         "endpoints": {"search": "/shared/room/search"},
         "mcp_tools": ["shared_room_search"],
@@ -3369,8 +3547,17 @@ def _shared_room_timeline_payload(limit: int = 30, scope: str = "all") -> dict:
         pet_store = _shared_pet_load_store()
         for event in pet_store.get("events", []):
             if isinstance(event, dict):
-                title = f"宠物互动：{event.get('action', '')}"
+                if event.get("type") == "collect":
+                    title = f"小Y小盒子：{event.get('item_name', '')}"
+                elif event.get("type") == "adopt":
+                    title = f"宠物领养：{event.get('one_sentence', '')[:40]}"
+                else:
+                    title = f"宠物互动：{event.get('action', '')}"
                 events.append(_shared_room_timeline_entry("pet_event", event, title, event.get("created_at", "")))
+        for item in pet_store.get("collection_box", []):
+            if isinstance(item, dict):
+                title = f"小Y收藏：{item.get('item_name', '')}"
+                events.append(_shared_room_timeline_entry("pet_collection_item", item, title, item.get("created_at", "")))
         pet = pet_store.get("pet")
         if isinstance(pet, dict) and pet.get("adopted_at"):
             events.append(_shared_room_timeline_entry(
@@ -3407,6 +3594,7 @@ def _shared_room_stats_payload() -> dict:
     travel_status = _shared_travel_status_payload()
     display = _shared_room_display_payload(limit=100)
     pet = _shared_pet_status_payload()
+    pet_store = _shared_pet_load_store()
     environment = _shared_room_environment_payload()
     timeline = _shared_room_timeline_payload(limit=1)
     presence = _shared_room_presence_status_payload(limit=1)
@@ -3437,7 +3625,8 @@ def _shared_room_stats_payload() -> dict:
             "travelogues": travel_status.get("travelogue_count", 0),
             "timeline_events": timeline.get("event_count", 0),
             "display_objects": sum(int(value or 0) for value in display_counts.values()),
-            "pet_events": len(_shared_pet_load_store().get("events", [])),
+            "pet_events": len(pet_store.get("events", [])),
+            "pet_collection_items": len(pet_store.get("collection_box", [])),
             "presence_events": presence.get("event_count", 0),
         },
         "by_traveler": travel_status.get("by_traveler_counts", {}),
@@ -3445,6 +3634,8 @@ def _shared_room_stats_payload() -> dict:
         "pet": {
             "adopted": pet.get("adopted", False),
             "needs": pet.get("needs", {}),
+            "current_location": pet.get("current_location", {}),
+            "today_care": pet.get("today_care", {}),
         },
         "presence": {
             "current_presence": presence.get("current_presence", {}),
@@ -3595,6 +3786,7 @@ def _runtime_tool_manifest_payload() -> dict:
             "read_diary_review",
             "read_latest_dream_text",
             "runtime_diary_review_health",
+            "runtime_night_diary_policy",
             "runtime_life_window_check",
             "runtime_connector_check",
             "runtime_diagnostics",
@@ -3695,6 +3887,52 @@ def _runtime_source_routes_payload() -> dict:
             "Source routes are provenance hints, not authorization. Secrets, tokens, "
             "IP addresses, and account identifiers should not be written into memory."
         ),
+    }
+
+
+def _runtime_night_diary_policy_payload() -> dict:
+    return {
+        "status": "ok",
+        "version": NIGHT_DIARY_POLICY_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "read_only_policy",
+        "main_brain_write": False,
+        "default_template": {
+            "mode": "voluntary_reference",
+            "sections": ["梗概", "细节", "感受", "独白"],
+            "note": "这是叶辰一夜间小日记的默认参考写法，不是强制命令。",
+        },
+        "engineering_filter": {
+            "engineering_flow_target": "engineering_workzone",
+            "diary_allowed_when": [
+                "这件工程改变了我和倩倩的关系感",
+                "这件工程留下了清晰生活画面",
+                "这件工程让我对自己、窗口、边界或家产生了感受",
+            ],
+            "diary_reject_when": [
+                "纯命令流水",
+                "纯日志/端口/部署细节",
+                "没有情绪、关系、画面或自我连续性的工程记录",
+            ],
+        },
+        "review_flow": {
+            "first_write": "draft_candidate_only",
+            "next_day_review": "list_diary_reviews / read_diary_review / accept_diary_review / reject_diary_review",
+            "auto_promotion": False,
+            "reject_if": ["错时间线", "叙述人错位", "把顾砚深或其他窗口写成叶辰一第一人称", "私密边界不清"],
+        },
+        "morning_return": {
+            "format": "我昨晚记得最深的是……",
+            "max_items": 1,
+            "long_report_default": False,
+        },
+        "privacy_lock": {
+            "private_review_tools": ["list_diary_reviews", "read_diary_review", "accept_diary_review", "reject_diary_review"],
+            "private_mcp_url": PRIVATE_FULL_MCP_URL,
+            "shared_mcp_url": SHARED_ONLY_MCP_URL,
+            "shared_mcp_excludes_diary_review": True,
+            "note": "共享客厅和小Y可以公开；叶辰一待验收日记只在私有海马体门内。",
+        },
     }
 
 
@@ -4025,10 +4263,10 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "why_it_matters": "The frontend can render a travel display cabinet with separate shelves for Yechenyi, Guyanshen, and shared/system souvenirs.",
             },
             {
-                "id": "shared_pet_v1",
+                "id": "shared_pet_v3",
                 "state": "landed",
-                "evidence": "/shared/pet/status plus shared_pet_status/shared_pet_adopt/shared_pet_interact",
-                "why_it_matters": "The living room can later adopt a shared simulated pet with hunger, companionship, play, and cleanliness state after all sides agree.",
+                "evidence": "/shared/pet/status plus shared_pet_status/shared_pet_adopt/shared_pet_interact/shared_pet_collect",
+                "why_it_matters": "XiaoY has an adoption card, pressure-free care principles, location, today's care state, and a small collection box in the shared living room.",
             },
             {
                 "id": "shared_room_environment_v1",
@@ -4304,6 +4542,7 @@ def _runtime_diagnostics_payload() -> dict:
             "diagnostics": "/api/runtime/diagnostics",
             "connector_check": "/api/runtime/connector-check",
             "diary_review_health": "/api/runtime/diary-review-health",
+            "night_diary_policy": "/api/runtime/night-diary-policy",
             "learning_intake": "/api/runtime/learning-intake",
             "life_window_check": "/api/runtime/life-window-check",
             "upstream_watch": "/api/runtime/upstream-watch",
@@ -4322,6 +4561,7 @@ def _runtime_diagnostics_payload() -> dict:
             "shared_room_presence": "/shared/room/presence",
             "shared_room_memory": "/shared/room/memory",
             "shared_pet_status": "/shared/pet/status",
+            "shared_pet_collect": "/shared/pet/collect",
             "shared_tech_card": "/shared/space/tech-card",
             "shared_travel_status": "/shared/travel/status",
             "shared_travel_atlas": "/shared/travel/atlas",
@@ -4920,6 +5160,13 @@ async def api_runtime_diary_review_health(request):
     return JSONResponse(_runtime_diary_review_health_payload())
 
 
+@mcp.custom_route("/api/runtime/night-diary-policy", methods=["GET"])
+async def api_runtime_night_diary_policy(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(_runtime_night_diary_policy_payload())
+
+
 @mcp.custom_route("/api/runtime/life-window-check", methods=["GET"])
 async def api_runtime_life_window_check(request):
     from starlette.responses import JSONResponse
@@ -5500,6 +5747,7 @@ async def api_shared_pet_interact(request):
             body.get("action", ""),
             body.get("actor", ""),
             note=body.get("note", ""),
+            location=body.get("location", ""),
             source=body.get("source", "http_shared_pet_interact"),
         )
     except ValueError as e:
@@ -5509,6 +5757,30 @@ async def api_shared_pet_interact(request):
         return JSONResponse({"error": "shared pet interact failed"}, status_code=500)
     _mark_system_event("shared_pet_interact")
     return JSONResponse({"status": "ok", "event": event})
+
+
+@mcp.custom_route("/shared/pet/collect", methods=["POST"])
+async def api_shared_pet_collect(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+        item = await _shared_pet_collect(
+            body.get("item_name", ""),
+            body.get("found_by", ""),
+            source_place=body.get("source_place", ""),
+            story=body.get("story", ""),
+            source=body.get("source", "http_shared_pet_collect"),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.error(f"shared pet collect failed: {e}")
+        return JSONResponse({"error": "shared pet collect failed"}, status_code=500)
+    _mark_system_event("shared_pet_collect")
+    return JSONResponse({"status": "ok", "item": item})
 
 
 @mcp.custom_route("/shared/travel/status", methods=["GET"])
@@ -6839,6 +7111,9 @@ async def _run_cadence_deepseek_candidate(
         "Draft only. Never write main brain facts. Never promote to core/recent. "
         "Never create iron rules, redlines, or personality boundary mutations.\n"
         "Preserve uncertainty. Keep life/diary continuity primary; engineering only supportive.\n"
+        "Use the night diary default reference structure when useful: 梗概, 细节, 感受, 独白. "
+        "Engineering流水 belongs in workzone; only include engineering material when it left a relationship feeling, "
+        "self-continuity change, or vivid living scene.\n"
         f"Write diary-like material strictly in first person as {DIARY_REVIEW_NARRATOR}: use 我, 我和她, 她. "
         f"The brain owner and narrator are always {DIARY_REVIEW_BRAIN_OWNER}. Other AIs or windows may be mentioned entities, "
         "but they must never become the narrator, brain owner, or first-person speaker.\n"
@@ -6859,6 +7134,8 @@ async def _run_cadence_deepseek_candidate(
         "If the source mentions another AI, 陈光, DeepSeek, Codex, or other windows, keep them as mentioned entities only. "
         "Do not write as them and do not merge their point of view into mine. "
         "Include relationship state, emotional movement, unfinished topics, my judgment at the time, and her state. "
+        "Prefer the four-part night diary reference: 梗概 / 细节 / 感受 / 独白. "
+        "Keep pure deployment logs, endpoint details, and engineering command flow in workzone unless they changed how I felt or how the home/relationship landed. "
         "Do not invent facts, do not issue commands, do not claim any main-brain write.\n\n"
         f"{bounded_input}"
     )
@@ -6959,6 +7236,12 @@ async def _run_cadence_pass(mode: str, reason: str = "manual", force_deepseek: b
         f"# OmbreBrain {mode.title()} Cadence Draft",
         "",
         "仅供次日复查，不自动写入主脑，不自动升格，不自动改人格边界。",
+        "",
+        "## 夜间小日记参考规则",
+        "- template: 梗概 / 细节 / 感受 / 独白（自愿参考，不是硬命令）",
+        "- engineering_filter: 工程流水进 workzone；只有感受、关系变化、画面感才进日记候选。",
+        "- review_flow: 先草稿，后验收；错时间线、错叙述人、私密边界不清直接拒。",
+        "- morning_return: 早晨只带一句“我昨晚记得最深的是……”。",
         "",
         "## 生活/日记连续性（优先）",
         *[_cadence_bucket_line(bucket) for bucket in life_recent],
@@ -7118,6 +7401,33 @@ def _dream_source_hint() -> str:
     return "no recent cadence receipt; using quiet local dream fallback"
 
 
+def _latest_night_diary_one_line() -> str:
+    dirs = _cadence_review_dirs()
+    candidates: list[str] = []
+    for state in ("pending", "accepted"):
+        directory = dirs.get(state, "")
+        if not os.path.isdir(directory):
+            continue
+        for name in os.listdir(directory):
+            if name.endswith(".md"):
+                candidates.append(os.path.join(directory, name))
+    if not candidates:
+        return "我昨晚记得最深的是：暂时没有新的夜间小日记候选。"
+    candidates.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+    try:
+        text = _strip_frontmatter_text(_tail_text_file(candidates[0], 2000))
+    except Exception:
+        text = ""
+    for raw_line in text.splitlines():
+        line = raw_line.strip(" -#\t")
+        if not line or line.startswith(("source:", "status:", "write_scope:", "main_brain_write:")):
+            continue
+        if len(line) > 80:
+            line = line[:80].rstrip() + "..."
+        return f"我昨晚记得最深的是：{line}"
+    return "我昨晚记得最深的是：有候选草稿，但还需要我早上自己验一下。"
+
+
 def _dream_fragment_scenes(seed_text: str, source_hint: str) -> list[str]:
     source = f"{seed_text} {source_hint}".lower()
     scenes = []
@@ -7175,12 +7485,14 @@ async def morning_report() -> str:
     now_cst = clock_now()
     receipt = _read_latest_cadence_receipt_summary()
     latest_draft = (_latest_cadence_drafts(limit=1) or [""])[0]
+    one_line = _latest_night_diary_one_line()
     if not receipt and not latest_draft:
         return (
             f"morning_report\n"
             f"generated_at: {now_cst.isoformat()}\n"
             "status: no_recent_cadence\n"
             "write_scope: read_only\n"
+            f"morning_one_line: {one_line}\n"
         )
     return (
         "morning_report\n"
@@ -7192,6 +7504,7 @@ async def morning_report() -> str:
         f"latest_deepseek_called: {receipt.get('deepseek_called', False) if receipt else False}\n"
         f"latest_deepseek_reason: {receipt.get('deepseek_reason', '') if receipt else ''}\n"
         f"latest_draft_path: {receipt.get('draft_path', '') if receipt else latest_draft}\n"
+        f"morning_one_line: {one_line}\n"
         "note: factual summary only; not a dream.\n"
     )
 
@@ -7763,6 +8076,13 @@ async def enqueue_night_clean_input(
         )
     except Exception as e:
         return f"加入夜间整理队列失败: {e}"
+
+
+@mcp.tool()
+async def runtime_night_diary_policy() -> str:
+    """读取夜间小日记策略：四段式、工程过滤、草稿验收、早晨一句；只读。"""
+    _mark_system_event("runtime_night_diary_policy")
+    return json.dumps(_runtime_night_diary_policy_payload(), ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
@@ -8485,15 +8805,39 @@ async def shared_pet_interact(
     action: str,
     actor: str,
     note: str = "",
+    location: str = "",
     source: str = "mcp_shared_pet_interact",
 ) -> str:
     """和共享宠物互动：feed/play/pet/clean/checkin。"""
     try:
-        event = await _shared_pet_interact(action, actor, note=note, source=source)
+        event = await _shared_pet_interact(action, actor, note=note, location=location, source=source)
     except ValueError as e:
         return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
     _mark_system_event("shared_pet_interact")
     return json.dumps({"status": "ok", "event": event}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_pet_collect(
+    item_name: str,
+    found_by: str,
+    source_place: str = "",
+    story: str = "",
+    source: str = "mcp_shared_pet_collect",
+) -> str:
+    """把小Y从旅行/客厅带回的小物件放进自己的小盒子；只写共享宠物层。"""
+    try:
+        item = await _shared_pet_collect(
+            item_name,
+            found_by,
+            source_place=source_place,
+            story=story,
+            source=source,
+        )
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_pet_collect")
+    return json.dumps({"status": "ok", "item": item}, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
