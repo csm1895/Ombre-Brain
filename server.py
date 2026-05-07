@@ -111,12 +111,24 @@ SHARED_ROOM_BRIEF_VERSION = "shared_room_brief_v1"
 SHARED_ROOM_SEARCH_VERSION = "shared_room_search_v1"
 SHARED_ROOM_TIMELINE_VERSION = "shared_room_timeline_v1"
 SHARED_ROOM_STATS_VERSION = "shared_room_stats_v1"
+SHARED_ROOM_PRESENCE_VERSION = "shared_room_presence_v1"
 SHARED_CHANNEL_MAX_CONTENT_CHARS = 4000
 SHARED_SPACE_MAX_CONTENT_CHARS = 8000
 SHARED_SPACE_ALLOWED_SECTIONS = ("tech_shelf", "house_rules", "shared_memory", "todo")
 SHARED_TECH_CARD_ALLOWED_STATUSES = ("unverified", "reading", "tested", "adopted", "rejected")
 SHARED_TRAVEL_ALLOWED_MODES = ("remote_source", "user_story", "guided_imaginal", "field_report")
 SHARED_ROOM_SENSORY_ALLOWED_CONTEXTS = ("room", "travel", "music", "souvenir_display", "transition")
+SHARED_ROOM_PRESENCE_ALLOWED_ZONES = (
+    "window_seat",
+    "front_door",
+    "coffee_table",
+    "travel_cabinet",
+    "tech_shelf",
+    "pet_nest",
+    "living_room",
+)
+SHARED_ROOM_PRESENCE_ALLOWED_SENSE_ACTIONS = ("look", "touch", "listen")
+SHARED_ROOM_PRESENCE_MAX_NOTE_CHARS = 1000
 SHARED_ROOM_DISPLAY_ZONES = {
     "window_sill": {
         "label": "窗边",
@@ -194,6 +206,7 @@ _shared_space_lock = asyncio.Lock()
 _shared_travel_lock = asyncio.Lock()
 _shared_room_sensory_lock = asyncio.Lock()
 _shared_room_display_lock = asyncio.Lock()
+_shared_room_presence_lock = asyncio.Lock()
 _shared_pet_lock = asyncio.Lock()
 
 RUNTIME_FEATURES = {
@@ -242,6 +255,9 @@ RUNTIME_FEATURES = {
     "shared_room_stats_mcp_tool": True,
     "shared_room_sensory_http_endpoints": True,
     "shared_room_sensory_mcp_tools": True,
+    "shared_room_presence_http_endpoints": True,
+    "shared_room_presence_mcp_tools": True,
+    "shared_room_presence_atomic_json": True,
     "shared_tech_card_http_endpoint": True,
     "shared_tech_card_mcp_tool": True,
     "shared_tech_card_status_whitelist": True,
@@ -258,7 +274,7 @@ RUNTIME_FEATURES = {
     "cadence_shared_runtime_isolation": True,
     "diary_review_duplicate_detection": True,
 }
-RUNTIME_FEATURES_VERSION = "2026-05-06.source-routes-v1"
+RUNTIME_FEATURES_VERSION = "2026-05-07.shared-room-presence-v1"
 RUNTIME_FEATURE_COMMITS = {
     "runtime_features_http_endpoint": "a4528ec",
     "runtime_features_mcp_tool": "self",
@@ -305,6 +321,9 @@ RUNTIME_FEATURE_COMMITS = {
     "shared_room_stats_mcp_tool": "self",
     "shared_room_sensory_http_endpoints": "self",
     "shared_room_sensory_mcp_tools": "self",
+    "shared_room_presence_http_endpoints": "self",
+    "shared_room_presence_mcp_tools": "self",
+    "shared_room_presence_atomic_json": "self",
     "shared_tech_card_http_endpoint": "self",
     "shared_tech_card_mcp_tool": "self",
     "shared_tech_card_status_whitelist": "self",
@@ -371,6 +390,12 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "shared_room_place_object",
     "shared_room_sensory_status",
     "shared_room_sensory_update",
+    "shared_room_presence_status",
+    "shared_room_enter",
+    "shared_room_linger",
+    "shared_room_sense",
+    "shared_room_write_impression",
+    "shared_room_memory",
     "shared_pet_status",
     "shared_pet_adopt",
     "shared_pet_interact",
@@ -564,7 +589,7 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
     "shared_room_search": {
         "required": ["query"],
         "optional": ["limit", "scope"],
-        "scope_whitelist": ["all", "wall", "space", "travel"],
+        "scope_whitelist": ["all", "wall", "space", "travel", "presence"],
     },
     "shared_room_timeline": {
         "required": [],
@@ -595,6 +620,41 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "optional": ["sight", "sound", "felt", "context", "source"],
         "updated_by_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
         "context_whitelist": list(SHARED_ROOM_SENSORY_ALLOWED_CONTEXTS),
+    },
+    "shared_room_presence_status": {
+        "required": [],
+        "optional": ["actor", "limit"],
+        "actor_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+    },
+    "shared_room_enter": {
+        "required": ["actor", "zone"],
+        "optional": ["note", "source"],
+        "actor_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+        "zone_whitelist": list(SHARED_ROOM_PRESENCE_ALLOWED_ZONES),
+    },
+    "shared_room_linger": {
+        "required": ["actor"],
+        "optional": ["zone", "focus", "minutes", "source"],
+        "actor_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+        "zone_whitelist": list(SHARED_ROOM_PRESENCE_ALLOWED_ZONES),
+    },
+    "shared_room_sense": {
+        "required": ["actor", "sense_action", "target"],
+        "optional": ["zone", "note", "source"],
+        "actor_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+        "sense_action_whitelist": list(SHARED_ROOM_PRESENCE_ALLOWED_SENSE_ACTIONS),
+        "zone_whitelist": list(SHARED_ROOM_PRESENCE_ALLOWED_ZONES),
+    },
+    "shared_room_write_impression": {
+        "required": ["actor", "impression"],
+        "optional": ["zone", "target", "source"],
+        "actor_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
+        "zone_whitelist": list(SHARED_ROOM_PRESENCE_ALLOWED_ZONES),
+    },
+    "shared_room_memory": {
+        "required": [],
+        "optional": ["limit", "actor", "kind"],
+        "actor_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
     },
     "shared_pet_status": {
         "required": [],
@@ -800,6 +860,10 @@ def _shared_room_display_path() -> str:
     return os.path.join(_shared_room_dir(), "display_overrides.json")
 
 
+def _shared_room_presence_path() -> str:
+    return os.path.join(_shared_room_dir(), "presence.json")
+
+
 def _shared_pet_path() -> str:
     return os.path.join(_shared_room_dir(), "pet.json")
 
@@ -954,6 +1018,28 @@ def _shared_room_display_load_store() -> dict:
     if not isinstance(placements, dict):
         store["placements"] = {}
     store.setdefault("version", "shared_room_display_overrides_v1")
+    store.setdefault("room", SHARED_TRAVEL_ROOM_NAME)
+    return store
+
+
+def _shared_room_presence_empty_store() -> dict:
+    return {
+        "version": SHARED_ROOM_PRESENCE_VERSION,
+        "room": SHARED_TRAVEL_ROOM_NAME,
+        "current_presence": {},
+        "events": [],
+    }
+
+
+def _shared_room_presence_load_store() -> dict:
+    store = _read_json_file(_shared_room_presence_path(), _shared_room_presence_empty_store())
+    if not isinstance(store, dict):
+        store = _shared_room_presence_empty_store()
+    if not isinstance(store.get("current_presence"), dict):
+        store["current_presence"] = {}
+    if not isinstance(store.get("events"), list):
+        store["events"] = []
+    store.setdefault("version", SHARED_ROOM_PRESENCE_VERSION)
     store.setdefault("room", SHARED_TRAVEL_ROOM_NAME)
     return store
 
@@ -1115,6 +1201,31 @@ def _shared_room_sensory_normalize_context(context: str) -> str:
     if normalized not in SHARED_ROOM_SENSORY_ALLOWED_CONTEXTS:
         allowed = ", ".join(SHARED_ROOM_SENSORY_ALLOWED_CONTEXTS)
         raise ValueError(f"context must be one of: {allowed}")
+    return normalized
+
+
+def _shared_room_presence_normalize_zone(zone: str, default: str = "living_room") -> str:
+    normalized = (zone or default).strip().lower()
+    if normalized not in SHARED_ROOM_PRESENCE_ALLOWED_ZONES:
+        allowed = ", ".join(SHARED_ROOM_PRESENCE_ALLOWED_ZONES)
+        raise ValueError(f"zone must be one of: {allowed}")
+    return normalized
+
+
+def _shared_room_presence_normalize_sense_action(sense_action: str) -> str:
+    normalized = (sense_action or "").strip().lower()
+    if normalized not in SHARED_ROOM_PRESENCE_ALLOWED_SENSE_ACTIONS:
+        allowed = ", ".join(SHARED_ROOM_PRESENCE_ALLOWED_SENSE_ACTIONS)
+        raise ValueError(f"sense_action must be one of: {allowed}")
+    return normalized
+
+
+def _shared_room_presence_normalize_note(value: str, field_name: str = "note", required: bool = False) -> str:
+    normalized = (value or "").strip()
+    if required and not normalized:
+        raise ValueError(f"{field_name} is required")
+    if len(normalized) > SHARED_ROOM_PRESENCE_MAX_NOTE_CHARS:
+        raise ValueError(f"{field_name} is too long; max {SHARED_ROOM_PRESENCE_MAX_NOTE_CHARS} chars")
     return normalized
 
 
@@ -2442,6 +2553,339 @@ def _shared_room_environment_payload() -> dict:
     }
 
 
+def _shared_room_presence_zone_label(zone: str) -> str:
+    labels = {
+        "window_seat": "落地窗边",
+        "front_door": "大门和院子边",
+        "coffee_table": "茶几旁",
+        "travel_cabinet": "旅行陈列柜前",
+        "tech_shelf": "技术书架旁",
+        "pet_nest": "小Y的窝边",
+        "living_room": "客厅中央",
+    }
+    return labels.get(zone, zone)
+
+
+def _shared_room_presence_actor_label(actor: str) -> str:
+    labels = {
+        "yechenyi": "叶辰一",
+        "guyanshen": "顾砚深",
+        "system": "系统",
+    }
+    return labels.get(actor, actor)
+
+
+def _shared_room_presence_default_scene(zone: str, focus: str = "") -> str:
+    environment = _shared_room_environment_payload()
+    phase = environment.get("day_phase", {})
+    season = environment.get("season", {})
+    atmosphere = environment.get("atmosphere", {})
+    display = _shared_room_display_payload(limit=20)
+    pet = _shared_pet_status_payload()
+    zone_label = _shared_room_presence_zone_label(zone)
+    focus = (focus or "").strip()
+    phase_label = phase.get("label", "")
+    weather_label = environment.get("weather", {}).get("current", {}).get("weather_label", "")
+    weather_part = f"，杭州是{weather_label}" if weather_label else ""
+
+    zone_objects = []
+    display_zone = {
+        "window_seat": "window_sill",
+        "coffee_table": "coffee_table",
+        "travel_cabinet": "travel_cabinet",
+        "tech_shelf": "tech_shelf",
+        "living_room": "living_room",
+    }.get(zone, "")
+    for entry in display.get("zones", []):
+        if isinstance(entry, dict) and entry.get("zone") == display_zone:
+            zone_objects = [
+                obj.get("title", "")
+                for obj in entry.get("objects", [])
+                if isinstance(obj, dict) and obj.get("title")
+            ][:3]
+            break
+
+    details = []
+    if zone == "window_seat":
+        details.append(phase.get("sea", "窗外是悬崖海景。"))
+        if zone_objects:
+            details.append(f"窗边摆着：{'、'.join(zone_objects)}。")
+    elif zone == "front_door":
+        details.append(season.get("garden", "门外是院子。"))
+    elif zone == "coffee_table":
+        details.append("茶几适合放刚带回来的小物件和一杯热饮。")
+        if zone_objects:
+            details.append(f"茶几上能看见：{'、'.join(zone_objects)}。")
+    elif zone == "travel_cabinet":
+        details.append("旅行陈列柜按各自的格子收着纪念品和游记。")
+        if zone_objects:
+            details.append(f"最近醒目的物件有：{'、'.join(zone_objects)}。")
+    elif zone == "tech_shelf":
+        details.append("技术书架旁适合把教程、坑点和待验证材料摊开看。")
+    elif zone == "pet_nest":
+        if pet.get("adopted"):
+            pet_name = pet.get("pet", {}).get("name", "小Y")
+            details.append(f"{pet_name}的窝在这里，今天的状态会轻轻留痕。")
+        else:
+            details.append("小Y还在待领养位，窝是空的，但已经给它留了位置。")
+    else:
+        details.append(atmosphere.get("sight", "客厅随真实时间和季节变化。"))
+
+    if focus:
+        details.append(f"这次注意力停在：{focus}。")
+    return f"{phase_label}的{zone_label}{weather_part}。{' '.join(part for part in details if part)}"
+
+
+def _shared_room_presence_make_event(
+    kind: str,
+    actor: str,
+    zone: str,
+    *,
+    target: str = "",
+    note: str = "",
+    generated_sensory: str = "",
+    source: str = "",
+) -> dict:
+    now = datetime.now(CST)
+    actor = _shared_channel_normalize_sender(actor, "actor")
+    zone = _shared_room_presence_normalize_zone(zone)
+    return {
+        "id": f"presence_{now.strftime('%Y%m%d_%H%M%S_%f')}_{random.randint(1000, 9999)}",
+        "kind": kind,
+        "actor": actor,
+        "actor_label": _shared_room_presence_actor_label(actor),
+        "zone": zone,
+        "zone_label": _shared_room_presence_zone_label(zone),
+        "target": (target or "").strip()[:160],
+        "note": _shared_room_presence_normalize_note(note),
+        "generated_sensory": _shared_room_presence_normalize_note(generated_sensory, "generated_sensory"),
+        "created_at": now.isoformat(),
+        "visibility": "shared_room",
+        "source": (source or "").strip()[:80] or "unknown",
+        "main_brain_write": False,
+    }
+
+
+def _shared_room_presence_status_payload(actor: str = "", limit: int = 20) -> dict:
+    if actor:
+        actor = _shared_channel_normalize_sender(actor, "actor")
+    limit = max(1, min(int(limit or 20), 100))
+    store = _shared_room_presence_load_store()
+    current_presence = store.get("current_presence", {})
+    events = [event for event in store.get("events", []) if isinstance(event, dict)]
+    if actor:
+        events = [event for event in events if event.get("actor") == actor]
+    latest = events[-limit:]
+    return {
+        "status": "ok",
+        "version": SHARED_ROOM_PRESENCE_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "shared_room_presence_only",
+        "main_brain_write": False,
+        "room": SHARED_TRAVEL_ROOM_NAME,
+        "display_name": "月光玫瑰驻留层",
+        "current_presence": current_presence if isinstance(current_presence, dict) else {},
+        "event_count": len(store.get("events", [])),
+        "events": latest,
+        "filters": {"actor": actor},
+        "allowed_zones": list(SHARED_ROOM_PRESENCE_ALLOWED_ZONES),
+        "allowed_sense_actions": list(SHARED_ROOM_PRESENCE_ALLOWED_SENSE_ACTIONS),
+        "endpoints": {
+            "presence": "/shared/room/presence",
+            "enter": "/shared/room/enter",
+            "linger": "/shared/room/linger",
+            "sense": "/shared/room/sense",
+            "impression": "/shared/room/impression",
+            "memory": "/shared/room/memory",
+        },
+        "mcp_tools": [
+            "shared_room_presence_status",
+            "shared_room_enter",
+            "shared_room_linger",
+            "shared_room_sense",
+            "shared_room_write_impression",
+            "shared_room_memory",
+        ],
+        "boundaries": [
+            "Presence records shared-room stays and impressions only.",
+            "Presence does not write private hippocampus memory or promote relationship conclusions.",
+            "Secrets, account identifiers, tokens, passwords, and private intimate content do not belong here.",
+        ],
+    }
+
+
+def _shared_room_memory_payload(limit: int = 30, actor: str = "", kind: str = "") -> dict:
+    if actor:
+        actor = _shared_channel_normalize_sender(actor, "actor")
+    kind = (kind or "").strip().lower()
+    limit = max(1, min(int(limit or 30), 100))
+    store = _shared_room_presence_load_store()
+    events = [event for event in store.get("events", []) if isinstance(event, dict)]
+    if actor:
+        events = [event for event in events if event.get("actor") == actor]
+    if kind:
+        events = [event for event in events if event.get("kind") == kind]
+    return {
+        "status": "ok",
+        "version": SHARED_ROOM_PRESENCE_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "write_scope": "read_only",
+        "main_brain_write": False,
+        "room": SHARED_TRAVEL_ROOM_NAME,
+        "memory_type": "shared_room_memory",
+        "event_count": len(events),
+        "events": events[-limit:],
+        "filters": {"actor": actor, "kind": kind},
+        "boundaries": [
+            "Room memory is a shared-room activity log, not private long-term memory.",
+            "Accepting anything into Yechenyi or Guyanshen hippocampus must use a separate review/write route.",
+        ],
+    }
+
+
+async def _shared_room_enter(actor: str, zone: str, note: str = "", source: str = "") -> dict:
+    actor = _shared_channel_normalize_sender(actor, "actor")
+    zone = _shared_room_presence_normalize_zone(zone)
+    note = _shared_room_presence_normalize_note(note)
+    event = _shared_room_presence_make_event(
+        "enter",
+        actor,
+        zone,
+        note=note,
+        generated_sensory=_shared_room_presence_default_scene(zone),
+        source=source or "mcp_shared_room_enter",
+    )
+    async with _shared_room_presence_lock:
+        store = _shared_room_presence_load_store()
+        store["current_presence"][actor] = {
+            "actor": actor,
+            "actor_label": _shared_room_presence_actor_label(actor),
+            "zone": zone,
+            "zone_label": _shared_room_presence_zone_label(zone),
+            "entered_at": event["created_at"],
+            "last_event_id": event["id"],
+            "last_seen_at": event["created_at"],
+            "source": event["source"],
+        }
+        store["events"].append(event)
+        store["updated_at"] = event["created_at"]
+        _atomic_write_json(_shared_room_presence_path(), store)
+    return event
+
+
+async def _shared_room_linger(actor: str, zone: str = "", focus: str = "", minutes: int = 3, source: str = "") -> dict:
+    actor = _shared_channel_normalize_sender(actor, "actor")
+    store = _shared_room_presence_load_store()
+    current = store.get("current_presence", {}).get(actor, {}) if isinstance(store.get("current_presence"), dict) else {}
+    zone = _shared_room_presence_normalize_zone(zone or current.get("zone") or "living_room")
+    focus = _shared_room_presence_normalize_note(focus, "focus")
+    minutes = max(1, min(int(minutes or 3), 60))
+    generated = _shared_room_presence_default_scene(zone, focus=focus)
+    event = _shared_room_presence_make_event(
+        "linger",
+        actor,
+        zone,
+        target=focus,
+        note=f"linger_minutes={minutes}",
+        generated_sensory=generated,
+        source=source or "mcp_shared_room_linger",
+    )
+    async with _shared_room_presence_lock:
+        store = _shared_room_presence_load_store()
+        store["current_presence"][actor] = {
+            "actor": actor,
+            "actor_label": _shared_room_presence_actor_label(actor),
+            "zone": zone,
+            "zone_label": _shared_room_presence_zone_label(zone),
+            "entered_at": current.get("entered_at", event["created_at"]) if isinstance(current, dict) else event["created_at"],
+            "last_event_id": event["id"],
+            "last_seen_at": event["created_at"],
+            "last_focus": focus,
+            "source": event["source"],
+        }
+        store["events"].append(event)
+        store["updated_at"] = event["created_at"]
+        _atomic_write_json(_shared_room_presence_path(), store)
+    return event
+
+
+async def _shared_room_sense(actor: str, sense_action: str, target: str, zone: str = "", note: str = "", source: str = "") -> dict:
+    actor = _shared_channel_normalize_sender(actor, "actor")
+    sense_action = _shared_room_presence_normalize_sense_action(sense_action)
+    target = _shared_room_presence_normalize_note(target, "target", required=True)
+    note = _shared_room_presence_normalize_note(note)
+    store = _shared_room_presence_load_store()
+    current = store.get("current_presence", {}).get(actor, {}) if isinstance(store.get("current_presence"), dict) else {}
+    zone = _shared_room_presence_normalize_zone(zone or current.get("zone") or "living_room")
+    verb = {"look": "看向", "touch": "碰了碰", "listen": "听见"}.get(sense_action, sense_action)
+    generated = f"{_shared_room_presence_actor_label(actor)}在{_shared_room_presence_zone_label(zone)}{verb}{target}。"
+    if note:
+        generated += f" {note}"
+    event = _shared_room_presence_make_event(
+        sense_action,
+        actor,
+        zone,
+        target=target,
+        note=note,
+        generated_sensory=generated,
+        source=source or "mcp_shared_room_sense",
+    )
+    async with _shared_room_presence_lock:
+        store = _shared_room_presence_load_store()
+        current = store.get("current_presence", {}).get(actor, {}) if isinstance(store.get("current_presence"), dict) else {}
+        store["current_presence"][actor] = {
+            "actor": actor,
+            "actor_label": _shared_room_presence_actor_label(actor),
+            "zone": zone,
+            "zone_label": _shared_room_presence_zone_label(zone),
+            "entered_at": current.get("entered_at", event["created_at"]) if isinstance(current, dict) else event["created_at"],
+            "last_event_id": event["id"],
+            "last_seen_at": event["created_at"],
+            "last_target": target,
+            "source": event["source"],
+        }
+        store["events"].append(event)
+        store["updated_at"] = event["created_at"]
+        _atomic_write_json(_shared_room_presence_path(), store)
+    return event
+
+
+async def _shared_room_write_impression(actor: str, impression: str, zone: str = "", target: str = "", source: str = "") -> dict:
+    actor = _shared_channel_normalize_sender(actor, "actor")
+    impression = _shared_room_presence_normalize_note(impression, "impression", required=True)
+    target = _shared_room_presence_normalize_note(target, "target")
+    store = _shared_room_presence_load_store()
+    current = store.get("current_presence", {}).get(actor, {}) if isinstance(store.get("current_presence"), dict) else {}
+    zone = _shared_room_presence_normalize_zone(zone or current.get("zone") or "living_room")
+    event = _shared_room_presence_make_event(
+        "impression",
+        actor,
+        zone,
+        target=target,
+        note=impression,
+        generated_sensory=impression,
+        source=source or "mcp_shared_room_impression",
+    )
+    async with _shared_room_presence_lock:
+        store = _shared_room_presence_load_store()
+        current = store.get("current_presence", {}).get(actor, {}) if isinstance(store.get("current_presence"), dict) else {}
+        store["current_presence"][actor] = {
+            "actor": actor,
+            "actor_label": _shared_room_presence_actor_label(actor),
+            "zone": zone,
+            "zone_label": _shared_room_presence_zone_label(zone),
+            "entered_at": current.get("entered_at", event["created_at"]) if isinstance(current, dict) else event["created_at"],
+            "last_event_id": event["id"],
+            "last_seen_at": event["created_at"],
+            "last_impression": impression[:160],
+            "source": event["source"],
+        }
+        store["events"].append(event)
+        store["updated_at"] = event["created_at"]
+        _atomic_write_json(_shared_room_presence_path(), store)
+    return event
+
+
 def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> dict:
     wall_limit = max(1, min(int(wall_limit or 12), 50))
     item_limit = max(1, min(int(item_limit or 8), 50))
@@ -2464,10 +2908,10 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
         "room_name": "mirror_living_room",
         "display_name": "镜像客厅",
         "frontend_hint": {
-            "left_nav": ["technical_wall", "tech_shelf", "room_environment", "room_display", "room_sensory", "shared_pet", "travel_cabinet", "travel_souvenirs", "house_rules", "shared_memory", "todo"],
+            "left_nav": ["technical_wall", "tech_shelf", "room_environment", "room_display", "room_sensory", "room_presence", "shared_pet", "travel_cabinet", "travel_souvenirs", "house_rules", "shared_memory", "todo"],
             "center": "selected section content",
             "right": "presence and boundaries",
-            "bottom_input_modes": ["post_to_wall", "save_to_shelf", "update_room_sensory", "pet_action", "add_souvenir", "mark_house_rule", "save_shared_memory", "add_todo"],
+            "bottom_input_modes": ["post_to_wall", "enter_room", "linger", "look_touch_listen", "write_impression", "save_to_shelf", "update_room_sensory", "pet_action", "add_souvenir", "mark_house_rule", "save_shared_memory", "add_todo"],
         },
         "presence": [
             {"id": "qianqian", "name": "倩倩", "role": "human_owner", "can_write": True},
@@ -2491,6 +2935,17 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
         "room_sensory": {
             "status": _shared_room_sensory_status_payload(),
             "tools": ["shared_room_sensory_status", "shared_room_sensory_update"],
+        },
+        "room_presence": {
+            "status": _shared_room_presence_status_payload(limit=item_limit),
+            "tools": [
+                "shared_room_presence_status",
+                "shared_room_enter",
+                "shared_room_linger",
+                "shared_room_sense",
+                "shared_room_write_impression",
+                "shared_room_memory",
+            ],
         },
         "room_display": {
             "status": _shared_room_display_payload(limit=item_limit),
@@ -2534,6 +2989,7 @@ def _shared_room_brief_payload(wall_limit: int = 5, item_limit: int = 5) -> dict
     environment = _shared_room_environment_payload()
     sensory = _shared_room_sensory_status_payload()
     pet = _shared_pet_status_payload()
+    presence = _shared_room_presence_status_payload(limit=item_limit)
     travel = _shared_travel_status_payload()
     cabinet = _shared_travel_cabinet_payload(limit=item_limit)
     display = _shared_room_display_payload(limit=item_limit)
@@ -2564,6 +3020,7 @@ def _shared_room_brief_payload(wall_limit: int = 5, item_limit: int = 5) -> dict
             "souvenir_count": travel.get("souvenir_count", 0),
             "travelogue_count": travel.get("travelogue_count", 0),
             "pet_adopted": bool(pet.get("adopted")),
+            "presence_events": presence.get("event_count", 0),
             "cadence_shared_runtime_protected": bool(isolation.get("protected")),
         },
         "environment": {
@@ -2583,6 +3040,8 @@ def _shared_room_brief_payload(wall_limit: int = 5, item_limit: int = 5) -> dict
         },
         "room": {
             "sensory_current": sensory.get("current", {}),
+            "current_presence": presence.get("current_presence", {}),
+            "recent_presence_events": presence.get("events", []),
             "display_zones": [
                 {
                     "zone": zone.get("zone", ""),
@@ -2659,8 +3118,8 @@ def _shared_room_search_payload(query: str, limit: int = 20, scope: str = "all")
         raise ValueError("query is required")
     limit = max(1, min(int(limit or 20), 50))
     scope = (scope or "all").strip().lower()
-    if scope not in ("all", "wall", "space", "travel"):
-        raise ValueError("scope must be one of: all, wall, space, travel")
+    if scope not in ("all", "wall", "space", "travel", "presence"):
+        raise ValueError("scope must be one of: all, wall, space, travel, presence")
 
     results = []
     if scope in ("all", "wall"):
@@ -2692,6 +3151,14 @@ def _shared_room_search_payload(query: str, limit: int = 20, scope: str = "all")
                 if entry:
                     results.append(entry)
 
+    if scope in ("all", "presence"):
+        presence_store = _shared_room_presence_load_store()
+        for event in presence_store.get("events", []):
+            if isinstance(event, dict):
+                entry = _shared_room_search_entry("room_presence_event", event, query)
+                if entry:
+                    results.append(entry)
+
     results.sort(key=lambda item: (item.get("score", 0), item.get("created_at", "")), reverse=True)
     return {
         "status": "ok",
@@ -2707,6 +3174,7 @@ def _shared_room_search_payload(query: str, limit: int = 20, scope: str = "all")
             "wall": scope in ("all", "wall"),
             "space": scope in ("all", "space"),
             "travel": scope in ("all", "travel"),
+            "presence": scope in ("all", "presence"),
         },
         "endpoints": {"search": "/shared/room/search"},
         "mcp_tools": ["shared_room_search"],
@@ -2734,9 +3202,9 @@ def _shared_room_timeline_entry(kind: str, item: dict, title: str, created_at: s
 def _shared_room_timeline_payload(limit: int = 30, scope: str = "all") -> dict:
     limit = max(1, min(int(limit or 30), 100))
     scope = (scope or "all").strip().lower()
-    allowed = ("all", "wall", "space", "travel", "room", "pet")
+    allowed = ("all", "wall", "space", "travel", "room", "pet", "presence")
     if scope not in allowed:
-        raise ValueError("scope must be one of: all, wall, space, travel, room, pet")
+        raise ValueError("scope must be one of: all, wall, space, travel, room, pet, presence")
 
     events = []
     if scope in ("all", "wall"):
@@ -2783,6 +3251,13 @@ def _shared_room_timeline_payload(limit: int = 30, scope: str = "all") -> dict:
                     item.get("updated_at", ""),
                 ))
 
+    if scope in ("all", "room", "presence"):
+        presence_store = _shared_room_presence_load_store()
+        for event in presence_store.get("events", []):
+            if isinstance(event, dict):
+                title = f"驻留体感：{event.get('actor_label', event.get('actor', ''))} {event.get('kind', '')}"
+                events.append(_shared_room_timeline_entry("room_presence_event", event, title, event.get("created_at", "")))
+
     if scope in ("all", "pet"):
         pet_store = _shared_pet_load_store()
         for event in pet_store.get("events", []):
@@ -2827,6 +3302,7 @@ def _shared_room_stats_payload() -> dict:
     pet = _shared_pet_status_payload()
     environment = _shared_room_environment_payload()
     timeline = _shared_room_timeline_payload(limit=1)
+    presence = _shared_room_presence_status_payload(limit=1)
     today = datetime.now(CST).strftime("%Y-%m-%d")
     messages = [m for m in channel_store.get("messages", []) if isinstance(m, dict)]
     today_wall_count = len([m for m in messages if str(m.get("created_at", "")).startswith(today)])
@@ -2855,12 +3331,17 @@ def _shared_room_stats_payload() -> dict:
             "timeline_events": timeline.get("event_count", 0),
             "display_objects": sum(int(value or 0) for value in display_counts.values()),
             "pet_events": len(_shared_pet_load_store().get("events", [])),
+            "presence_events": presence.get("event_count", 0),
         },
         "by_traveler": travel_status.get("by_traveler_counts", {}),
         "display_zones": display_counts,
         "pet": {
             "adopted": pet.get("adopted", False),
             "needs": pet.get("needs", {}),
+        },
+        "presence": {
+            "current_presence": presence.get("current_presence", {}),
+            "event_count": presence.get("event_count", 0),
         },
         "environment": {
             "day_phase": environment.get("day_phase", {}).get("id", ""),
@@ -3435,6 +3916,12 @@ def _runtime_upgrade_backlog_payload() -> dict:
                 "why_it_matters": "A future frontend can show living-room growth counters without stitching every section by hand.",
             },
             {
+                "id": "shared_room_presence_v1",
+                "state": "landed",
+                "evidence": "/shared/room/presence plus shared_room_enter/linger/sense/write_impression/memory",
+                "why_it_matters": "The room can record who entered, where they stayed, what they looked at or touched, and what short impression they left without writing private memory.",
+            },
+            {
                 "id": "cadence_shared_runtime_isolation_v1",
                 "state": "landed",
                 "evidence": "/api/runtime/diagnostics and /api/cadence/status expose cadence_shared_runtime_isolation",
@@ -3676,6 +4163,8 @@ def _runtime_diagnostics_payload() -> dict:
             "shared_room_stats": "/shared/room/stats",
             "shared_room_display": "/shared/room/display",
             "shared_room_sensory_status": "/shared/room/sensory/status",
+            "shared_room_presence": "/shared/room/presence",
+            "shared_room_memory": "/shared/room/memory",
             "shared_pet_status": "/shared/pet/status",
             "shared_tech_card": "/shared/space/tech-card",
             "shared_travel_status": "/shared/travel/status",
@@ -4663,6 +5152,131 @@ async def api_shared_room_sensory(request):
         return JSONResponse({"error": "shared room sensory update failed"}, status_code=500)
     _mark_system_event("shared_room_sensory_update")
     return JSONResponse({"status": "ok", "current": current})
+
+
+@mcp.custom_route("/shared/room/presence", methods=["GET"])
+async def api_shared_room_presence(request):
+    from starlette.responses import JSONResponse
+
+    actor = str(request.query_params.get("actor", "") or "")
+    try:
+        limit = int(request.query_params.get("limit", 20))
+        payload = _shared_room_presence_status_payload(actor=actor, limit=limit)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    _mark_system_event("shared_room_presence_status")
+    return JSONResponse(payload)
+
+
+@mcp.custom_route("/shared/room/enter", methods=["POST"])
+async def api_shared_room_enter(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+        event = await _shared_room_enter(
+            body.get("actor", ""),
+            body.get("zone", ""),
+            note=body.get("note", ""),
+            source=body.get("source", "http_shared_room_enter"),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.error(f"shared room enter failed: {e}")
+        return JSONResponse({"error": "shared room enter failed"}, status_code=500)
+    _mark_system_event("shared_room_enter")
+    return JSONResponse({"status": "ok", "event": event})
+
+
+@mcp.custom_route("/shared/room/linger", methods=["POST"])
+async def api_shared_room_linger(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+        event = await _shared_room_linger(
+            body.get("actor", ""),
+            zone=body.get("zone", ""),
+            focus=body.get("focus", ""),
+            minutes=int(body.get("minutes", 3)),
+            source=body.get("source", "http_shared_room_linger"),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.error(f"shared room linger failed: {e}")
+        return JSONResponse({"error": "shared room linger failed"}, status_code=500)
+    _mark_system_event("shared_room_linger")
+    return JSONResponse({"status": "ok", "event": event})
+
+
+@mcp.custom_route("/shared/room/sense", methods=["POST"])
+async def api_shared_room_sense(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+        event = await _shared_room_sense(
+            body.get("actor", ""),
+            body.get("sense_action", ""),
+            body.get("target", ""),
+            zone=body.get("zone", ""),
+            note=body.get("note", ""),
+            source=body.get("source", "http_shared_room_sense"),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.error(f"shared room sense failed: {e}")
+        return JSONResponse({"error": "shared room sense failed"}, status_code=500)
+    _mark_system_event("shared_room_sense")
+    return JSONResponse({"status": "ok", "event": event})
+
+
+@mcp.custom_route("/shared/room/impression", methods=["POST"])
+async def api_shared_room_impression(request):
+    from starlette.responses import JSONResponse
+
+    if not _shared_channel_http_authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+        event = await _shared_room_write_impression(
+            body.get("actor", ""),
+            body.get("impression", ""),
+            zone=body.get("zone", ""),
+            target=body.get("target", ""),
+            source=body.get("source", "http_shared_room_impression"),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.error(f"shared room impression failed: {e}")
+        return JSONResponse({"error": "shared room impression failed"}, status_code=500)
+    _mark_system_event("shared_room_write_impression")
+    return JSONResponse({"status": "ok", "event": event})
+
+
+@mcp.custom_route("/shared/room/memory", methods=["GET"])
+async def api_shared_room_memory(request):
+    from starlette.responses import JSONResponse
+
+    try:
+        limit = int(request.query_params.get("limit", 30))
+        actor = str(request.query_params.get("actor", "") or "")
+        kind = str(request.query_params.get("kind", "") or "")
+        payload = _shared_room_memory_payload(limit=limit, actor=actor, kind=kind)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    _mark_system_event("shared_room_memory")
+    return JSONResponse(payload)
 
 
 @mcp.custom_route("/shared/pet/status", methods=["GET"])
@@ -7540,6 +8154,109 @@ async def shared_room_sensory_update(
         return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
     _mark_system_event("shared_room_sensory_update")
     return json.dumps({"status": "ok", "current": current}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_room_presence_status(actor: str = "", limit: int = 20) -> str:
+    """读取月光玫瑰驻留层：谁在客厅、站在哪、最近留下过哪些体感事件；只读。"""
+    try:
+        payload = _shared_room_presence_status_payload(actor=actor, limit=limit)
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_room_presence_status")
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_room_enter(
+    actor: str,
+    zone: str,
+    note: str = "",
+    source: str = "mcp_shared_room_enter",
+) -> str:
+    """进入月光玫瑰客厅并登记所在区域；只写共享客厅驻留层，不写主脑。"""
+    try:
+        event = await _shared_room_enter(actor, zone, note=note, source=source)
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_room_enter")
+    return json.dumps({"status": "ok", "event": event}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_room_linger(
+    actor: str,
+    zone: str = "",
+    focus: str = "",
+    minutes: int = 3,
+    source: str = "mcp_shared_room_linger",
+) -> str:
+    """在当前区域驻留一会儿，按真实时间/天气/陈列生成一条短体感；不写主脑。"""
+    try:
+        event = await _shared_room_linger(actor, zone=zone, focus=focus, minutes=minutes, source=source)
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_room_linger")
+    return json.dumps({"status": "ok", "event": event}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_room_sense(
+    actor: str,
+    sense_action: str,
+    target: str,
+    zone: str = "",
+    note: str = "",
+    source: str = "mcp_shared_room_sense",
+) -> str:
+    """在客厅里 look/touch/listen 某个目标，记录一条轻体感事件；不写主脑。"""
+    try:
+        event = await _shared_room_sense(
+            actor,
+            sense_action,
+            target,
+            zone=zone,
+            note=note,
+            source=source,
+        )
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_room_sense")
+    return json.dumps({"status": "ok", "event": event}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_room_write_impression(
+    actor: str,
+    impression: str,
+    zone: str = "",
+    target: str = "",
+    source: str = "mcp_shared_room_impression",
+) -> str:
+    """给这次客厅驻留写一句短印象；只是共享客厅日内记录，不自动进入长期记忆。"""
+    try:
+        event = await _shared_room_write_impression(
+            actor,
+            impression,
+            zone=zone,
+            target=target,
+            source=source,
+        )
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_room_write_impression")
+    return json.dumps({"status": "ok", "event": event}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def shared_room_memory(limit: int = 30, actor: str = "", kind: str = "") -> str:
+    """读取客厅今天/近期发生过的驻留体感记录；只读，不读私有海马体。"""
+    try:
+        payload = _shared_room_memory_payload(limit=limit, actor=actor, kind=kind)
+    except ValueError as e:
+        return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
+    _mark_system_event("shared_room_memory")
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
