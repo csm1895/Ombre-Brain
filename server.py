@@ -120,6 +120,7 @@ SHARED_ROOM_TIMELINE_VERSION = "shared_room_timeline_v1"
 SHARED_ROOM_STATS_VERSION = "shared_room_stats_v1"
 SHARED_ROOM_PRESENCE_VERSION = "shared_room_presence_v1"
 LOCAL_OLLAMA_WORKER_VERSION = "local_ollama_worker_v1"
+SESSION_TAIL_VERSION = "session_tail_v1"
 SHARED_CHANNEL_MAX_CONTENT_CHARS = 4000
 SHARED_SPACE_MAX_CONTENT_CHARS = 8000
 SHARED_SPACE_ALLOWED_SECTIONS = ("tech_shelf", "house_rules", "shared_memory", "todo")
@@ -280,6 +281,8 @@ RUNTIME_FEATURES = {
     "runtime_upstream_watch_mcp_tool": True,
     "runtime_source_routes_http_endpoint": True,
     "runtime_source_routes_mcp_tool": True,
+    "session_tail_http_endpoints": True,
+    "session_tail_mcp_tools": True,
     "local_ollama_worker_http_endpoints": True,
     "local_ollama_worker_mcp_tools": True,
     "local_ollama_worker_local_only": True,
@@ -327,7 +330,7 @@ RUNTIME_FEATURES = {
     "cadence_shared_runtime_isolation": True,
     "diary_review_duplicate_detection": True,
 }
-RUNTIME_FEATURES_VERSION = "2026-05-07.local-ollama-worker-v1"
+RUNTIME_FEATURES_VERSION = "2026-05-07.session-tail-v1"
 RUNTIME_FEATURE_COMMITS = {
     "runtime_features_http_endpoint": "a4528ec",
     "runtime_features_mcp_tool": "self",
@@ -351,6 +354,8 @@ RUNTIME_FEATURE_COMMITS = {
     "runtime_upstream_watch_mcp_tool": "self",
     "runtime_source_routes_http_endpoint": "self",
     "runtime_source_routes_mcp_tool": "self",
+    "session_tail_http_endpoints": "self",
+    "session_tail_mcp_tools": "self",
     "local_ollama_worker_http_endpoints": "self",
     "local_ollama_worker_mcp_tools": "self",
     "local_ollama_worker_local_only": "self",
@@ -430,6 +435,8 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "runtime_upgrade_backlog",
     "runtime_upstream_watch",
     "save_tail_context",
+    "session_tail_status",
+    "save_session_tail",
     "search",
     "see_image",
     "set_attachment",
@@ -668,6 +675,30 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "required": [],
         "optional": [],
         "sections": list(SHARED_SPACE_ALLOWED_SECTIONS),
+    },
+    "session_tail_status": {
+        "required": [],
+        "optional": [],
+        "latest_only": True,
+    },
+    "save_session_tail": {
+        "required": ["body_id"],
+        "optional": [
+            "identity",
+            "last_user_message",
+            "last_assistant_message",
+            "last_active_topic",
+            "last_emotional_state",
+            "last_action",
+            "last_artifact",
+            "last_tool_state",
+            "unfinished",
+            "resume_hint",
+            "platform_source",
+            "model_source",
+            "visibility_scope",
+        ],
+        "write_scope": "session_tail_latest_only",
     },
     "local_ollama_status": {
         "required": [],
@@ -4937,6 +4968,10 @@ TAIL_CONTEXT_PATH = os.environ.get(
     "OMBRE_TAIL_CONTEXT_PATH",
     os.path.join(TAIL_CONTEXT_DIR, "latest_tail_context.md"),
 )
+SESSION_TAIL_PATH = os.environ.get(
+    "OMBRE_SESSION_TAIL_PATH",
+    os.path.join(TAIL_CONTEXT_DIR, "session_tail.json"),
+)
 TAIL_CONTEXT_MAX_MESSAGES = max(1, int(os.environ.get("OMBRE_TAIL_CONTEXT_MAX_MESSAGES", "20")))
 CADENCE_IDLE_MINUTES = max(60, int(os.environ.get("OMBRE_IDLE_CADENCE_MINUTES", "120")))
 CADENCE_NIGHT_START_HOUR = max(0, min(23, int(os.environ.get("OMBRE_NIGHT_CADENCE_START_HOUR", "1"))))
@@ -5086,6 +5121,128 @@ def _save_tail_context_text(raw_text: str, window_id: str = "", max_messages: in
     with open(TAIL_CONTEXT_PATH, "w", encoding="utf-8") as handle:
         handle.write("\n".join(content))
     return {"saved": True, "path": TAIL_CONTEXT_PATH, "message_count": len(items)}
+
+
+def _session_tail_clean(value: str, max_chars: int = 1000) -> str:
+    return (value or "").strip()[:max_chars]
+
+
+def _session_tail_empty_payload() -> dict:
+    return {
+        "status": "empty",
+        "version": SESSION_TAIL_VERSION,
+        "latest_only": True,
+        "main_brain_write": False,
+        "decay_participation": False,
+        "path": SESSION_TAIL_PATH,
+        "tail": {},
+        "usage": {
+            "startup_priority": "read_before_long_recall",
+            "purpose": "preserve the previous breath across windows, apps, models, and bodies",
+        },
+    }
+
+
+def _session_tail_load_payload() -> dict:
+    data = _read_json_file(SESSION_TAIL_PATH, {})
+    if not isinstance(data, dict) or not data:
+        return _session_tail_empty_payload()
+    tail = data.get("tail") if isinstance(data.get("tail"), dict) else data
+    return {
+        "status": "ok",
+        "version": data.get("version", SESSION_TAIL_VERSION),
+        "latest_only": True,
+        "main_brain_write": False,
+        "decay_participation": False,
+        "path": SESSION_TAIL_PATH,
+        "tail": tail,
+        "usage": {
+            "startup_priority": "read_before_long_recall",
+            "purpose": "preserve the previous breath across windows, apps, models, and bodies",
+        },
+    }
+
+
+def _save_session_tail_payload(
+    *,
+    identity: str = "yechenyi",
+    body_id: str,
+    last_user_message: str = "",
+    last_assistant_message: str = "",
+    last_active_topic: str = "",
+    last_emotional_state: str = "",
+    last_action: str = "",
+    last_artifact: str = "",
+    last_tool_state: str = "",
+    unfinished: str = "",
+    resume_hint: str = "",
+    platform_source: str = "",
+    model_source: str = "",
+    visibility_scope: str = "identity_private",
+) -> dict:
+    body_id = _session_tail_clean(body_id, 120)
+    if not body_id:
+        return {"saved": False, "reason": "body_id_required"}
+    now_cst = clock_now()
+    tail = {
+        "identity": _session_tail_clean(identity or "yechenyi", 80),
+        "last_body_id": body_id,
+        "platform_source": _session_tail_clean(platform_source, 80),
+        "model_source": _session_tail_clean(model_source, 80),
+        "visibility_scope": _session_tail_clean(visibility_scope or "identity_private", 120),
+        "last_user_message": _session_tail_clean(last_user_message, 1600),
+        "last_assistant_message": _session_tail_clean(last_assistant_message, 1600),
+        "last_active_topic": _session_tail_clean(last_active_topic, 400),
+        "last_emotional_state": _session_tail_clean(last_emotional_state, 400),
+        "last_action": _session_tail_clean(last_action, 400),
+        "last_artifact": _session_tail_clean(last_artifact, 400),
+        "last_tool_state": _session_tail_clean(last_tool_state, 800),
+        "unfinished": _session_tail_clean(unfinished, 800),
+        "resume_hint": _session_tail_clean(resume_hint, 800),
+        "updated_at": now_cst.isoformat(),
+    }
+    payload = {
+        "version": SESSION_TAIL_VERSION,
+        "latest_only": True,
+        "main_brain_write": False,
+        "decay_participation": False,
+        "tail": tail,
+    }
+    _atomic_write_json(SESSION_TAIL_PATH, payload)
+    return {
+        "saved": True,
+        "path": SESSION_TAIL_PATH,
+        "version": SESSION_TAIL_VERSION,
+        "latest_only": True,
+        "main_brain_write": False,
+        "decay_participation": False,
+        "tail": tail,
+    }
+
+
+def _read_session_tail_section() -> str:
+    payload = _session_tail_load_payload()
+    tail = payload.get("tail") if isinstance(payload.get("tail"), dict) else {}
+    if not tail:
+        return "=== Session Tail / 上一口气 ===\n暂无结构化 session_tail。\n"
+    lines = [
+        "=== Session Tail / 上一口气 ===",
+        f"identity: {tail.get('identity', '')}",
+        f"last_body_id: {tail.get('last_body_id', '')}",
+        f"platform_source: {tail.get('platform_source', '')}",
+        f"model_source: {tail.get('model_source', '')}",
+        f"updated_at: {tail.get('updated_at', '')}",
+        f"last_active_topic: {tail.get('last_active_topic', '')}",
+        f"last_user_message: {tail.get('last_user_message', '')}",
+        f"last_assistant_message: {tail.get('last_assistant_message', '')}",
+        f"last_action: {tail.get('last_action', '')}",
+        f"last_artifact: {tail.get('last_artifact', '')}",
+        f"last_tool_state: {tail.get('last_tool_state', '')}",
+        f"unfinished: {tail.get('unfinished', '')}",
+        f"resume_hint: {tail.get('resume_hint', '')}",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def _read_tail_context_section() -> str:
@@ -8112,7 +8269,7 @@ async def startup_bridge(scene: str = "outside_daily_window") -> str:
         "- if retrieval is still thin, use the startup payload / fallback summary\n"
         "- do not ask the user to resend tutorials first\n\n"
     )
-    tail_section = _read_tail_context_section() + "\n=== Live Recall ===\n"
+    tail_section = _read_session_tail_section() + "\n" + _read_tail_context_section() + "\n=== Live Recall ===\n"
     ready, ready_error = await _wait_for_runtime_ready(max_wait_seconds=2.5)
     if not ready:
         return (
@@ -8164,6 +8321,51 @@ async def save_tail_context(messages: str, window_id: str = "", max_messages: in
         "main_brain_write: false\n"
         "decay_participation: false"
     )
+
+
+@mcp.tool()
+async def session_tail_status() -> str:
+    """读取结构化上一口气 session_tail；只读，不写主脑。"""
+    _mark_runtime_activity("session_tail_status")
+    return json.dumps(_session_tail_load_payload(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def save_session_tail(
+    body_id: str,
+    identity: str = "yechenyi",
+    last_user_message: str = "",
+    last_assistant_message: str = "",
+    last_active_topic: str = "",
+    last_emotional_state: str = "",
+    last_action: str = "",
+    last_artifact: str = "",
+    last_tool_state: str = "",
+    unfinished: str = "",
+    resume_hint: str = "",
+    platform_source: str = "",
+    model_source: str = "",
+    visibility_scope: str = "identity_private",
+) -> str:
+    """保存结构化上一口气，供跨窗口/跨APP/跨模型恢复；latest-only，不写主脑。"""
+    _mark_runtime_activity("save_session_tail")
+    result = _save_session_tail_payload(
+        identity=identity,
+        body_id=body_id,
+        last_user_message=last_user_message,
+        last_assistant_message=last_assistant_message,
+        last_active_topic=last_active_topic,
+        last_emotional_state=last_emotional_state,
+        last_action=last_action,
+        last_artifact=last_artifact,
+        last_tool_state=last_tool_state,
+        unfinished=unfinished,
+        resume_hint=resume_hint,
+        platform_source=platform_source,
+        model_source=model_source,
+        visibility_scope=visibility_scope,
+    )
+    return json.dumps(result, ensure_ascii=False, indent=2)
 
 
 # =============================================================
@@ -10422,6 +10624,38 @@ async def api_tail_context(request):
         max_messages=max(1, min(50, int(body.get("max_messages", TAIL_CONTEXT_MAX_MESSAGES)))),
     )
     return JSONResponse(result)
+
+
+@mcp.custom_route("/api/session-tail", methods=["GET", "POST"])
+async def api_session_tail(request):
+    from starlette.responses import JSONResponse
+
+    if request.method == "GET":
+        _mark_runtime_activity("session_tail_status")
+        return JSONResponse(_session_tail_load_payload())
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    result = _save_session_tail_payload(
+        identity=str(body.get("identity", "yechenyi") or "yechenyi"),
+        body_id=str(body.get("body_id", "") or ""),
+        last_user_message=str(body.get("last_user_message", "") or ""),
+        last_assistant_message=str(body.get("last_assistant_message", "") or ""),
+        last_active_topic=str(body.get("last_active_topic", "") or ""),
+        last_emotional_state=str(body.get("last_emotional_state", "") or ""),
+        last_action=str(body.get("last_action", "") or ""),
+        last_artifact=str(body.get("last_artifact", "") or ""),
+        last_tool_state=str(body.get("last_tool_state", "") or ""),
+        unfinished=str(body.get("unfinished", "") or ""),
+        resume_hint=str(body.get("resume_hint", "") or ""),
+        platform_source=str(body.get("platform_source", "") or ""),
+        model_source=str(body.get("model_source", "") or ""),
+        visibility_scope=str(body.get("visibility_scope", "identity_private") or "identity_private"),
+    )
+    _mark_runtime_activity("save_session_tail")
+    status_code = 200 if result.get("saved") else 400
+    return JSONResponse(result, status_code=status_code)
 
 
 def _api_notes_file():
