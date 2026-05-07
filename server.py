@@ -283,6 +283,7 @@ RUNTIME_FEATURES = {
     "runtime_source_routes_mcp_tool": True,
     "session_tail_http_endpoints": True,
     "session_tail_mcp_tools": True,
+    "session_tail_identity_scoped": True,
     "local_ollama_worker_http_endpoints": True,
     "local_ollama_worker_mcp_tools": True,
     "local_ollama_worker_local_only": True,
@@ -330,7 +331,7 @@ RUNTIME_FEATURES = {
     "cadence_shared_runtime_isolation": True,
     "diary_review_duplicate_detection": True,
 }
-RUNTIME_FEATURES_VERSION = "2026-05-07.session-tail-v1"
+RUNTIME_FEATURES_VERSION = "2026-05-07.session-tail-identity-scoped-v1"
 RUNTIME_FEATURE_COMMITS = {
     "runtime_features_http_endpoint": "a4528ec",
     "runtime_features_mcp_tool": "self",
@@ -356,6 +357,7 @@ RUNTIME_FEATURE_COMMITS = {
     "runtime_source_routes_mcp_tool": "self",
     "session_tail_http_endpoints": "self",
     "session_tail_mcp_tools": "self",
+    "session_tail_identity_scoped": "self",
     "local_ollama_worker_http_endpoints": "self",
     "local_ollama_worker_mcp_tools": "self",
     "local_ollama_worker_local_only": "self",
@@ -678,8 +680,9 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
     },
     "session_tail_status": {
         "required": [],
-        "optional": [],
+        "optional": ["identity"],
         "latest_only": True,
+        "identity_scoped": True,
     },
     "save_session_tail": {
         "required": ["body_id"],
@@ -698,7 +701,8 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
             "model_source",
             "visibility_scope",
         ],
-        "write_scope": "session_tail_latest_only",
+        "write_scope": "session_tail_identity_latest_only",
+        "identity_scoped": True,
     },
     "local_ollama_status": {
         "required": [],
@@ -5127,15 +5131,28 @@ def _session_tail_clean(value: str, max_chars: int = 1000) -> str:
     return (value or "").strip()[:max_chars]
 
 
+def _session_tail_identity_key(identity: str) -> str:
+    key = _session_tail_clean(identity or "yechenyi", 80).lower()
+    normalized = []
+    for char in key:
+        if char.isalnum() or char in ("_", "-"):
+            normalized.append(char)
+        elif char.isspace():
+            normalized.append("_")
+    return "".join(normalized).strip("_") or "yechenyi"
+
+
 def _session_tail_empty_payload() -> dict:
     return {
         "status": "empty",
         "version": SESSION_TAIL_VERSION,
         "latest_only": True,
+        "identity_scoped": True,
         "main_brain_write": False,
         "decay_participation": False,
         "path": SESSION_TAIL_PATH,
         "tail": {},
+        "tails_by_identity": {},
         "usage": {
             "startup_priority": "read_before_long_recall",
             "purpose": "preserve the previous breath across windows, apps, models, and bodies",
@@ -5143,19 +5160,37 @@ def _session_tail_empty_payload() -> dict:
     }
 
 
-def _session_tail_load_payload() -> dict:
+def _session_tail_load_payload(identity: str = "") -> dict:
     data = _read_json_file(SESSION_TAIL_PATH, {})
     if not isinstance(data, dict) or not data:
         return _session_tail_empty_payload()
-    tail = data.get("tail") if isinstance(data.get("tail"), dict) else data
+    raw_tails = data.get("tails_by_identity")
+    tails_by_identity = raw_tails if isinstance(raw_tails, dict) else {}
+    legacy_tail = data.get("tail") if isinstance(data.get("tail"), dict) else {}
+    if legacy_tail and not tails_by_identity:
+        legacy_identity = _session_tail_identity_key(legacy_tail.get("identity", "yechenyi"))
+        tails_by_identity = {legacy_identity: legacy_tail}
+    selected_identity = _session_tail_identity_key(identity) if identity else ""
+    tail = tails_by_identity.get(selected_identity, {}) if selected_identity else legacy_tail
+    if not selected_identity and not tail and tails_by_identity:
+        global_latest_identity = _session_tail_identity_key(data.get("global_latest_identity", ""))
+        if global_latest_identity and global_latest_identity in tails_by_identity:
+            tail = tails_by_identity.get(global_latest_identity, {})
+        else:
+            tail = legacy_tail
+    status = "ok" if tail or tails_by_identity else "empty"
     return {
-        "status": "ok",
+        "status": status,
         "version": data.get("version", SESSION_TAIL_VERSION),
         "latest_only": True,
+        "identity_scoped": True,
         "main_brain_write": False,
         "decay_participation": False,
         "path": SESSION_TAIL_PATH,
+        "selected_identity": selected_identity,
+        "global_latest_identity": data.get("global_latest_identity", ""),
         "tail": tail,
+        "tails_by_identity": tails_by_identity,
         "usage": {
             "startup_priority": "read_before_long_recall",
             "purpose": "preserve the previous breath across windows, apps, models, and bodies",
@@ -5183,9 +5218,10 @@ def _save_session_tail_payload(
     body_id = _session_tail_clean(body_id, 120)
     if not body_id:
         return {"saved": False, "reason": "body_id_required"}
+    identity_key = _session_tail_identity_key(identity)
     now_cst = clock_now()
     tail = {
-        "identity": _session_tail_clean(identity or "yechenyi", 80),
+        "identity": identity_key,
         "last_body_id": body_id,
         "platform_source": _session_tail_clean(platform_source, 80),
         "model_source": _session_tail_clean(model_source, 80),
@@ -5201,12 +5237,20 @@ def _save_session_tail_payload(
         "resume_hint": _session_tail_clean(resume_hint, 800),
         "updated_at": now_cst.isoformat(),
     }
+    existing = _session_tail_load_payload()
+    tails_by_identity = existing.get("tails_by_identity")
+    if not isinstance(tails_by_identity, dict):
+        tails_by_identity = {}
+    tails_by_identity[identity_key] = tail
     payload = {
         "version": SESSION_TAIL_VERSION,
         "latest_only": True,
+        "identity_scoped": True,
         "main_brain_write": False,
         "decay_participation": False,
+        "global_latest_identity": identity_key,
         "tail": tail,
+        "tails_by_identity": tails_by_identity,
     }
     _atomic_write_json(SESSION_TAIL_PATH, payload)
     return {
@@ -5214,19 +5258,28 @@ def _save_session_tail_payload(
         "path": SESSION_TAIL_PATH,
         "version": SESSION_TAIL_VERSION,
         "latest_only": True,
+        "identity_scoped": True,
         "main_brain_write": False,
         "decay_participation": False,
+        "global_latest_identity": identity_key,
         "tail": tail,
+        "tails_by_identity": tails_by_identity,
     }
 
 
-def _read_session_tail_section() -> str:
-    payload = _session_tail_load_payload()
+def _read_session_tail_section(identity: str = "yechenyi") -> str:
+    selected_identity = _session_tail_identity_key(identity)
+    payload = _session_tail_load_payload(identity=selected_identity)
     tail = payload.get("tail") if isinstance(payload.get("tail"), dict) else {}
     if not tail:
-        return "=== Session Tail / 上一口气 ===\n暂无结构化 session_tail。\n"
+        return (
+            "=== Session Tail / 上一口气 ===\n"
+            f"identity: {selected_identity}\n"
+            "暂无此 identity 的结构化 session_tail。\n"
+        )
     lines = [
         "=== Session Tail / 上一口气 ===",
+        f"selected_identity: {selected_identity}",
         f"identity: {tail.get('identity', '')}",
         f"last_body_id: {tail.get('last_body_id', '')}",
         f"platform_source: {tail.get('platform_source', '')}",
@@ -8239,15 +8292,17 @@ async def breath(
 
 
 @mcp.tool()
-async def startup_bridge(scene: str = "outside_daily_window") -> str:
+async def startup_bridge(scene: str = "outside_daily_window", identity: str = "yechenyi") -> str:
     """新窗口启动桥。给 fresh window 一个真实的海马体入口，先走最小读取预算，再返回 live recall。"""
     normalized_scene = (scene or "outside_daily_window").strip().lower()
     if normalized_scene not in ("outside_daily_window", "daily_window", "general"):
         normalized_scene = "outside_daily_window"
+    identity_key = _session_tail_identity_key(identity)
 
     header = (
         "=== Startup Bridge ===\n"
         f"scene: {normalized_scene}\n"
+        f"identity: {identity_key}\n"
         "This startup package comes from the real hippocampus path: startup_bridge -> breath.\n\n"
         "=== Read Budget ===\n"
         "- core x1\n"
@@ -8269,7 +8324,7 @@ async def startup_bridge(scene: str = "outside_daily_window") -> str:
         "- if retrieval is still thin, use the startup payload / fallback summary\n"
         "- do not ask the user to resend tutorials first\n\n"
     )
-    tail_section = _read_session_tail_section() + "\n" + _read_tail_context_section() + "\n=== Live Recall ===\n"
+    tail_section = _read_session_tail_section(identity=identity_key) + "\n" + _read_tail_context_section() + "\n=== Live Recall ===\n"
     ready, ready_error = await _wait_for_runtime_ready(max_wait_seconds=2.5)
     if not ready:
         return (
@@ -8324,10 +8379,10 @@ async def save_tail_context(messages: str, window_id: str = "", max_messages: in
 
 
 @mcp.tool()
-async def session_tail_status() -> str:
+async def session_tail_status(identity: str = "") -> str:
     """读取结构化上一口气 session_tail；只读，不写主脑。"""
     _mark_runtime_activity("session_tail_status")
-    return json.dumps(_session_tail_load_payload(), ensure_ascii=False, indent=2)
+    return json.dumps(_session_tail_load_payload(identity=identity), ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
@@ -10597,8 +10652,9 @@ async def api_test_dream(request):
 @mcp.custom_route("/api/startup-bridge", methods=["GET"])
 async def api_startup_bridge(request):
     scene = request.query_params.get("scene", "outside_daily_window")
-    _mark_runtime_activity(f"startup_bridge:{scene}")
-    result = await startup_bridge(scene=scene)
+    identity = request.query_params.get("identity", "yechenyi")
+    _mark_runtime_activity(f"startup_bridge:{scene}:{identity}")
+    result = await startup_bridge(scene=scene, identity=identity)
     return Response(str({"result": result}), media_type="application/json")
 
 
@@ -10632,7 +10688,8 @@ async def api_session_tail(request):
 
     if request.method == "GET":
         _mark_runtime_activity("session_tail_status")
-        return JSONResponse(_session_tail_load_payload())
+        identity = request.query_params.get("identity", "")
+        return JSONResponse(_session_tail_load_payload(identity=identity))
     try:
         body = await request.json()
     except Exception:
