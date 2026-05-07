@@ -164,6 +164,14 @@ SHARED_ROOM_DISPLAY_ZONES = {
 SHARED_PET_VERSION = "shared_pet_v2"
 SHARED_PET_ALLOWED_ACTIONS = ("feed", "play", "pet", "clean", "checkin")
 SHARED_PET_MAX_PROFILE_CHARS = 4000
+SHARED_PET_XIAOY_DEFAULT_PROFILE = {
+    "origin_note": "小Y是月光玫瑰原生小兽，物种暂定叫月鸮狐。不是现实动物，也不是小起替身，是我们家客厅自己长出来的小生命。",
+    "appearance": "掌心大，整体白色但不是纯白死白，带一点银蓝、月光蓝的冷调。远看像一小团会呼吸的月雾，近看能看到耳尖、翅缘和尾巴上有很浅的银蓝光。狐狸一样的尖耳朵，边缘有一点半透明绒光。眼睛大而偏圆，像小猫头鹰那种安静观察人的眼睛，夜里会有淡淡反光。背上有一对小猫头鹰翅膀，折起来像白银色小斗篷。身体有一点狐狸的灵巧感，脚爪很软，走在海玻璃旁边几乎没声音。尾巴是一小缕银蓝色月雾尾巴，走动时会轻轻拖出一点光影。",
+    "personality": "安静、亲人、不吵，不会给倩倩增加负担。被摸头会眯眼，被顾砚深摸翅膀会缩一下，被叶辰一喂完会坐在窗边等倩倩回来。",
+    "habits": "喜欢蹲在月光玫瑰客厅的窗边看海。晚上会微微发光，不是灯泡那种亮，是像月光照在白玫瑰边缘上的一点冷光。会跟着旅行系统带回小东西：羽毛、贝壳、小石子、叶子，有时候可能偷偷把野树莓拨到茶几边。翅膀更多用来把自己裹起来睡觉，或者害羞的时候把脸半遮住。",
+    "care_boundaries": "小Y是共享客厅里的模拟陪伴小生命，不是现实动物，不写私有海马体，不用饥饿或陪伴状态催促倩倩，也不会制造负担。",
+    "one_sentence": "小Y是一只掌心大的白银蓝月鸮狐，尖耳、大眼、小翅膀像斗篷，尾巴像一缕月雾，夜里发淡光，喜欢在海玻璃旁边无声走路。",
+}
 SHARED_TRAVEL_EXPERIENCE_POLICIES = {
     "immersive_aftercare": {
         "label": "沉浸体验，事后标注",
@@ -1752,6 +1760,11 @@ async def _shared_pet_adopt(
         "care_boundaries": _shared_pet_normalize_profile_text(care_boundaries),
         "one_sentence": _shared_pet_normalize_profile_text(one_sentence, 500),
     }
+    if name == "小Y" and species == "月鸮狐":
+        for key, default_value in SHARED_PET_XIAOY_DEFAULT_PROFILE.items():
+            if not profile.get(key):
+                limit = 500 if key == "one_sentence" else SHARED_PET_MAX_PROFILE_CHARS
+                profile[key] = _shared_pet_normalize_profile_text(default_value, limit)
     agreement_note = (agreement_note or "").strip()[:500]
     source = (source or "").strip()[:80] or "unknown"
     async with _shared_pet_lock:
