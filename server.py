@@ -594,7 +594,7 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
     "shared_room_timeline": {
         "required": [],
         "optional": ["limit", "scope"],
-        "scope_whitelist": ["all", "wall", "space", "travel", "room", "pet"],
+        "scope_whitelist": ["all", "wall", "space", "travel", "room", "pet", "presence"],
     },
     "shared_room_stats": {
         "required": [],
