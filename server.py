@@ -284,6 +284,7 @@ RUNTIME_FEATURES = {
     "session_tail_http_endpoints": True,
     "session_tail_mcp_tools": True,
     "session_tail_identity_scoped": True,
+    "startup_bridge_identity_guard": True,
     "local_ollama_worker_http_endpoints": True,
     "local_ollama_worker_mcp_tools": True,
     "local_ollama_worker_local_only": True,
@@ -331,7 +332,7 @@ RUNTIME_FEATURES = {
     "cadence_shared_runtime_isolation": True,
     "diary_review_duplicate_detection": True,
 }
-RUNTIME_FEATURES_VERSION = "2026-05-07.session-tail-identity-scoped-v1"
+RUNTIME_FEATURES_VERSION = "2026-05-07.session-tail-identity-guard-v1"
 RUNTIME_FEATURE_COMMITS = {
     "runtime_features_http_endpoint": "a4528ec",
     "runtime_features_mcp_tool": "self",
@@ -358,6 +359,7 @@ RUNTIME_FEATURE_COMMITS = {
     "session_tail_http_endpoints": "self",
     "session_tail_mcp_tools": "self",
     "session_tail_identity_scoped": "self",
+    "startup_bridge_identity_guard": "self",
     "local_ollama_worker_http_endpoints": "self",
     "local_ollama_worker_mcp_tools": "self",
     "local_ollama_worker_local_only": "self",
@@ -5179,7 +5181,7 @@ def _session_tail_load_payload(identity: str = "") -> dict:
         else:
             tail = legacy_tail
     status = "ok" if tail or tails_by_identity else "empty"
-    return {
+    response = {
         "status": status,
         "version": data.get("version", SESSION_TAIL_VERSION),
         "latest_only": True,
@@ -5190,12 +5192,16 @@ def _session_tail_load_payload(identity: str = "") -> dict:
         "selected_identity": selected_identity,
         "global_latest_identity": data.get("global_latest_identity", ""),
         "tail": tail,
-        "tails_by_identity": tails_by_identity,
         "usage": {
             "startup_priority": "read_before_long_recall",
             "purpose": "preserve the previous breath across windows, apps, models, and bodies",
         },
     }
+    if selected_identity:
+        response["available_identities"] = sorted(tails_by_identity.keys())
+    else:
+        response["tails_by_identity"] = tails_by_identity
+    return response
 
 
 def _save_session_tail_payload(
@@ -5263,7 +5269,7 @@ def _save_session_tail_payload(
         "decay_participation": False,
         "global_latest_identity": identity_key,
         "tail": tail,
-        "tails_by_identity": tails_by_identity,
+        "available_identities": sorted(tails_by_identity.keys()),
     }
 
 
@@ -8324,6 +8330,16 @@ async def startup_bridge(scene: str = "outside_daily_window", identity: str = "y
         "- if retrieval is still thin, use the startup payload / fallback summary\n"
         "- do not ask the user to resend tutorials first\n\n"
     )
+    if identity_key != "yechenyi":
+        tail_section = _read_session_tail_section(identity=identity_key) + "\n"
+        return (
+            header
+            + tail_section
+            + "=== Identity Guard / 身份门锁 ===\n"
+            + "non-yechenyi identity: live recall and legacy tail_context are not attached here.\n"
+            + "非叶辰一身份：此启动桥只返回该身份自己的 session_tail，不附带叶辰一主海马体回忆或旧尾部原文。\n"
+        )
+
     tail_section = _read_session_tail_section(identity=identity_key) + "\n" + _read_tail_context_section() + "\n=== Live Recall ===\n"
     ready, ready_error = await _wait_for_runtime_ready(max_wait_seconds=2.5)
     if not ready:
