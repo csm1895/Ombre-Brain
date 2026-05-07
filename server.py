@@ -161,8 +161,9 @@ SHARED_ROOM_DISPLAY_ZONES = {
         "keywords": (),
     },
 }
-SHARED_PET_VERSION = "shared_pet_v1"
+SHARED_PET_VERSION = "shared_pet_v2"
 SHARED_PET_ALLOWED_ACTIONS = ("feed", "play", "pet", "clean", "checkin")
+SHARED_PET_MAX_PROFILE_CHARS = 4000
 SHARED_TRAVEL_EXPERIENCE_POLICIES = {
     "immersive_aftercare": {
         "label": "沉浸体验，事后标注",
@@ -715,7 +716,17 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
     },
     "shared_pet_adopt": {
         "required": ["name", "species", "adopted_by"],
-        "optional": ["traits", "agreement_note", "source"],
+        "optional": [
+            "traits",
+            "origin_note",
+            "appearance",
+            "personality",
+            "habits",
+            "care_boundaries",
+            "one_sentence",
+            "agreement_note",
+            "source",
+        ],
         "adopted_by_whitelist": list(SHARED_CHANNEL_ALLOWED_SENDERS),
     },
     "shared_pet_interact": {
@@ -1184,6 +1195,10 @@ def _shared_space_normalize_title(title: str) -> str:
     if not normalized:
         raise ValueError("title is required")
     return normalized[:120]
+
+
+def _shared_pet_normalize_profile_text(value: str, max_chars: int = SHARED_PET_MAX_PROFILE_CHARS) -> str:
+    return (value or "").strip()[:max_chars]
 
 
 def _shared_tech_card_normalize_status(status: str) -> str:
@@ -1716,6 +1731,12 @@ async def _shared_pet_adopt(
     species: str,
     adopted_by: str,
     traits: str = "",
+    origin_note: str = "",
+    appearance: str = "",
+    personality: str = "",
+    habits: str = "",
+    care_boundaries: str = "",
+    one_sentence: str = "",
     agreement_note: str = "",
     source: str = "",
 ) -> dict:
@@ -1723,6 +1744,14 @@ async def _shared_pet_adopt(
     species = _shared_space_normalize_title(species)
     adopted_by = _shared_channel_normalize_sender(adopted_by, "adopted_by")
     traits_list = _shared_channel_normalize_tags(traits)
+    profile = {
+        "origin_note": _shared_pet_normalize_profile_text(origin_note),
+        "appearance": _shared_pet_normalize_profile_text(appearance),
+        "personality": _shared_pet_normalize_profile_text(personality),
+        "habits": _shared_pet_normalize_profile_text(habits),
+        "care_boundaries": _shared_pet_normalize_profile_text(care_boundaries),
+        "one_sentence": _shared_pet_normalize_profile_text(one_sentence, 500),
+    }
     agreement_note = (agreement_note or "").strip()[:500]
     source = (source or "").strip()[:80] or "unknown"
     async with _shared_pet_lock:
@@ -1734,6 +1763,7 @@ async def _shared_pet_adopt(
             "name": name,
             "species": species,
             "traits": traits_list,
+            "profile": profile,
             "adopted_by": adopted_by,
             "agreement_note": agreement_note,
             "adopted_at": now.isoformat(),
@@ -1747,6 +1777,7 @@ async def _shared_pet_adopt(
             "type": "adopt",
             "actor": adopted_by,
             "note": agreement_note,
+            "one_sentence": profile.get("one_sentence", ""),
             "created_at": now.isoformat(),
             "source": source,
         }
@@ -2678,8 +2709,17 @@ def _shared_room_presence_default_scene(zone: str, focus: str = "") -> str:
         details.append("技术书架旁适合把教程、坑点和待验证材料摊开看。")
     elif zone == "pet_nest":
         if pet.get("adopted"):
-            pet_name = pet.get("pet", {}).get("name", "小Y")
-            details.append(f"{pet_name}的窝在这里，今天的状态会轻轻留痕。")
+            pet_data = pet.get("pet", {})
+            pet_name = pet_data.get("name", "小Y")
+            one_sentence = (
+                pet_data.get("profile", {}).get("one_sentence", "")
+                if isinstance(pet_data.get("profile"), dict)
+                else ""
+            )
+            if one_sentence:
+                details.append(f"{pet_name}的窝在这里：{one_sentence}")
+            else:
+                details.append(f"{pet_name}的窝在这里，今天的状态会轻轻留痕。")
         else:
             details.append("小Y还在待领养位，窝是空的，但已经给它留了位置。")
     else:
@@ -5417,6 +5457,12 @@ async def api_shared_pet_adopt(request):
             body.get("species", ""),
             body.get("adopted_by", ""),
             traits=body.get("traits", ""),
+            origin_note=body.get("origin_note", ""),
+            appearance=body.get("appearance", ""),
+            personality=body.get("personality", ""),
+            habits=body.get("habits", ""),
+            care_boundaries=body.get("care_boundaries", ""),
+            one_sentence=body.get("one_sentence", ""),
             agreement_note=body.get("agreement_note", ""),
             source=body.get("source", "http_shared_pet_adopt"),
         )
@@ -8390,6 +8436,12 @@ async def shared_pet_adopt(
     species: str,
     adopted_by: str,
     traits: str = "",
+    origin_note: str = "",
+    appearance: str = "",
+    personality: str = "",
+    habits: str = "",
+    care_boundaries: str = "",
+    one_sentence: str = "",
     agreement_note: str = "",
     source: str = "mcp_shared_pet_adopt",
 ) -> str:
@@ -8400,6 +8452,12 @@ async def shared_pet_adopt(
             species,
             adopted_by,
             traits=traits,
+            origin_note=origin_note,
+            appearance=appearance,
+            personality=personality,
+            habits=habits,
+            care_boundaries=care_boundaries,
+            one_sentence=one_sentence,
             agreement_note=agreement_note,
             source=source,
         )
