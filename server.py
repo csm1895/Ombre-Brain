@@ -84,6 +84,12 @@ mcp = FastMCP(
     host="0.0.0.0",
     port=int(os.environ.get("PORT", 8000)),
 )
+shared_mcp = FastMCP(
+    "Ombre Brain Shared Room",
+    host="0.0.0.0",
+    port=int(os.environ.get("PORT", 8000)),
+    streamable_http_path="/shared/mcp",
+)
 
 # --- Sticky notes directory (used by both HTTP API and MCP tools) ---
 # --- 便利贴目录（HTTP API 和 MCP 工具共用）---
@@ -179,6 +185,10 @@ SHARED_CHANNEL_CANONICAL_BASE_URL = os.environ.get(
     "OMBRE_SHARED_CHANNEL_CANONICAL_BASE_URL",
     "https://yechenyi.zeabur.app",
 ).rstrip("/")
+SHARED_ONLY_MCP_PATH = "/shared/mcp"
+PRIVATE_FULL_MCP_PATH = "/mcp"
+SHARED_ONLY_MCP_URL = f"{SHARED_CHANNEL_CANONICAL_BASE_URL}{SHARED_ONLY_MCP_PATH}"
+PRIVATE_FULL_MCP_URL = f"{SHARED_CHANNEL_CANONICAL_BASE_URL}{PRIVATE_FULL_MCP_PATH}"
 WRITE_WRAPPER_ASSOCIATED_MEMORY_TIMEOUT_SECONDS = max(
     0.5,
     float(os.environ.get("OMBRE_WRITE_ASSOCIATED_MEMORY_TIMEOUT_SECONDS", "3")),
@@ -258,6 +268,8 @@ RUNTIME_FEATURES = {
     "shared_room_presence_http_endpoints": True,
     "shared_room_presence_mcp_tools": True,
     "shared_room_presence_atomic_json": True,
+    "shared_only_mcp_endpoint": True,
+    "private_shared_mcp_split": True,
     "shared_tech_card_http_endpoint": True,
     "shared_tech_card_mcp_tool": True,
     "shared_tech_card_status_whitelist": True,
@@ -324,6 +336,8 @@ RUNTIME_FEATURE_COMMITS = {
     "shared_room_presence_http_endpoints": "self",
     "shared_room_presence_mcp_tools": "self",
     "shared_room_presence_atomic_json": "self",
+    "shared_only_mcp_endpoint": "self",
+    "private_shared_mcp_split": "self",
     "shared_tech_card_http_endpoint": "self",
     "shared_tech_card_mcp_tool": "self",
     "shared_tech_card_status_whitelist": "self",
@@ -415,6 +429,45 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "write_diary_draft",
     "write_project_workzone_update",
 ]
+SHARED_ONLY_EXPECTED_MCP_TOOLS = [
+    "shared_ack",
+    "shared_item_add",
+    "shared_item_list",
+    "shared_post",
+    "shared_read",
+    "shared_reply",
+    "shared_room_snapshot",
+    "shared_room_environment",
+    "shared_room_brief",
+    "shared_room_search",
+    "shared_room_timeline",
+    "shared_room_stats",
+    "shared_room_display",
+    "shared_room_place_object",
+    "shared_room_sensory_status",
+    "shared_room_sensory_update",
+    "shared_room_presence_status",
+    "shared_room_enter",
+    "shared_room_linger",
+    "shared_room_sense",
+    "shared_room_write_impression",
+    "shared_room_memory",
+    "shared_pet_status",
+    "shared_pet_adopt",
+    "shared_pet_interact",
+    "shared_space_status",
+    "shared_status",
+    "shared_tech_card_add",
+    "shared_travel_status",
+    "shared_souvenir_add",
+    "shared_souvenir_list",
+    "shared_travelogue_add",
+    "shared_travelogue_list",
+    "shared_travel_atlas",
+    "shared_travel_cabinet",
+    "shared_unread",
+]
+PRIVATE_ONLY_MCP_TOOLS = sorted(set(RUNTIME_EXPECTED_MCP_TOOLS) - set(SHARED_ONLY_EXPECTED_MCP_TOOLS))
 RUNTIME_DUPLICATE_REGISTRATION_NAMES = ["peek", "post"]
 RUNTIME_EXPECTED_TOOL_SCHEMAS = {
     "grow": {
@@ -1402,12 +1455,13 @@ def _shared_channel_status_payload() -> dict:
         "main_brain_write": False,
         "visibility": SHARED_CHANNEL_VISIBILITY,
         "canonical_base_url": SHARED_CHANNEL_CANONICAL_BASE_URL,
-        "canonical_mcp_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/mcp",
+        "canonical_mcp_url": SHARED_ONLY_MCP_URL,
+        "private_full_mcp_url": PRIVATE_FULL_MCP_URL,
         "canonical_status_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/shared/channel/status",
         "canonical_note": (
-            "For one actual shared living-room wall, both Yechenyi and Guyanshen should connect "
-            "their MCP clients to the same canonical_mcp_url. Using separate service URLs creates "
-            "separate local wall copies."
+            "For the shared living-room wall, both Yechenyi and Guyanshen should connect "
+            "their MCP clients to canonical_mcp_url, which exposes shared-room tools only. "
+            "The private_full_mcp_url is Yechenyi private hippocampus access and should not be used by Guyanshen."
         ),
         "storage_dir": _shared_channel_dir(),
         "message_count": len(messages),
@@ -1449,7 +1503,7 @@ def _shared_space_status_payload() -> dict:
         "write_scope": "shared_space_only",
         "main_brain_write": False,
         "canonical_base_url": SHARED_CHANNEL_CANONICAL_BASE_URL,
-        "canonical_mcp_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/mcp",
+        "canonical_mcp_url": SHARED_ONLY_MCP_URL,
         "canonical_status_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/shared/space/status",
         "storage_dir": _shared_space_dir(),
         "item_count": len(items),
@@ -1498,7 +1552,7 @@ def _shared_travel_status_payload() -> dict:
         "main_brain_write": False,
         "room": SHARED_TRAVEL_ROOM_NAME,
         "canonical_base_url": SHARED_CHANNEL_CANONICAL_BASE_URL,
-        "canonical_mcp_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/mcp",
+        "canonical_mcp_url": SHARED_ONLY_MCP_URL,
         "canonical_status_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/shared/travel/status",
         "storage_dir": _shared_travel_dir(),
         "souvenir_count": len(souvenirs),
@@ -1548,7 +1602,7 @@ def _shared_room_sensory_status_payload() -> dict:
         "main_brain_write": False,
         "room": SHARED_TRAVEL_ROOM_NAME,
         "canonical_base_url": SHARED_CHANNEL_CANONICAL_BASE_URL,
-        "canonical_mcp_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/mcp",
+        "canonical_mcp_url": SHARED_ONLY_MCP_URL,
         "canonical_status_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/shared/room/sensory/status",
         "storage_dir": _shared_room_dir(),
         "current": store.get("current", {}),
@@ -2903,7 +2957,7 @@ def _shared_room_snapshot_payload(wall_limit: int = 12, item_limit: int = 8) -> 
         "write_scope": "read_only",
         "main_brain_write": False,
         "canonical_base_url": SHARED_CHANNEL_CANONICAL_BASE_URL,
-        "canonical_mcp_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/mcp",
+        "canonical_mcp_url": SHARED_ONLY_MCP_URL,
         "canonical_status_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/shared/room/snapshot",
         "room_name": "mirror_living_room",
         "display_name": "镜像客厅",
@@ -3004,7 +3058,7 @@ def _shared_room_brief_payload(wall_limit: int = 5, item_limit: int = 5) -> dict
         "main_brain_write": False,
         "display_name": "月光玫瑰进门简报",
         "canonical_base_url": SHARED_CHANNEL_CANONICAL_BASE_URL,
-        "canonical_mcp_url": f"{SHARED_CHANNEL_CANONICAL_BASE_URL}/mcp",
+        "canonical_mcp_url": SHARED_ONLY_MCP_URL,
         "generated_at": datetime.now(CST).isoformat(),
         "summary": {
             "day_phase": environment.get("day_phase", {}).get("label", ""),
@@ -3461,12 +3515,21 @@ def _runtime_features_payload() -> dict:
 
 def _runtime_tool_manifest_payload() -> dict:
     expected = sorted(set(RUNTIME_EXPECTED_MCP_TOOLS))
+    shared_expected = sorted(set(SHARED_ONLY_EXPECTED_MCP_TOOLS))
     return {
         "status": "ok",
         "features_version": RUNTIME_FEATURES_VERSION,
         "git_sha": _runtime_git_sha(),
+        "mcp_urls": {
+            "private_full_mcp_url": PRIVATE_FULL_MCP_URL,
+            "shared_only_mcp_url": SHARED_ONLY_MCP_URL,
+        },
         "expected_mcp_tools": expected,
         "expected_mcp_tool_count": len(expected),
+        "shared_only_mcp_tools": shared_expected,
+        "shared_only_mcp_tool_count": len(shared_expected),
+        "private_only_mcp_tools": PRIVATE_ONLY_MCP_TOOLS,
+        "private_only_mcp_tool_count": len(PRIVATE_ONLY_MCP_TOOLS),
         "duplicate_registration_names": RUNTIME_DUPLICATE_REGISTRATION_NAMES,
         "critical_life_window_tools": [
             "startup_bridge",
@@ -3493,6 +3556,35 @@ def _runtime_tool_manifest_payload() -> dict:
             "If this manifest lists a tool but ChatGPT/Codex does not expose it, "
             "the server supports it and the connector schema likely needs reconnect/refresh."
         ),
+        "privacy_boundary": (
+            "Use shared_only_mcp_url for Guyanshen/shared living-room connectors. "
+            "Use private_full_mcp_url only for Yechenyi private hippocampus windows."
+        ),
+    }
+
+
+def _runtime_shared_tool_manifest_payload() -> dict:
+    expected = sorted(set(SHARED_ONLY_EXPECTED_MCP_TOOLS))
+    return {
+        "status": "ok",
+        "features_version": RUNTIME_FEATURES_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "mcp_url": SHARED_ONLY_MCP_URL,
+        "streamable_http_path": SHARED_ONLY_MCP_PATH,
+        "expected_mcp_tools": expected,
+        "expected_mcp_tool_count": len(expected),
+        "excluded_private_tools": PRIVATE_ONLY_MCP_TOOLS,
+        "excluded_private_tool_count": len(PRIVATE_ONLY_MCP_TOOLS),
+        "schema_expectations": {
+            name: RUNTIME_EXPECTED_TOOL_SCHEMAS.get(name, {})
+            for name in expected
+        },
+        "privacy_boundary": [
+            "This shared-only MCP exposes shared living-room tools only.",
+            "It must not expose Yechenyi private hippocampus tools such as hold, grow, breath, diary_review, or cadence tools.",
+            "Guyanshen/Claude should connect here for the shared room, not to the private full MCP URL.",
+            "Shared items do not automatically promote into either private hippocampus.",
+        ],
     }
 
 
@@ -4123,6 +4215,7 @@ def _runtime_connector_check_payload(
 
 def _runtime_diagnostics_payload() -> dict:
     manifest = _runtime_tool_manifest_payload()
+    shared_manifest = _runtime_shared_tool_manifest_payload()
     schemas = _runtime_schema_expectations_payload()
     features = _runtime_features_payload()
     return {
@@ -4133,6 +4226,8 @@ def _runtime_diagnostics_payload() -> dict:
         "startup_bridge_ready": _runtime_ready,
         "summary": {
             "expected_mcp_tool_count": manifest["expected_mcp_tool_count"],
+            "shared_only_mcp_tool_count": shared_manifest["expected_mcp_tool_count"],
+            "private_only_mcp_tool_count": manifest["private_only_mcp_tool_count"],
             "schema_expectation_count": schemas["schema_expectation_count"],
             "critical_life_window_tool_count": len(manifest["critical_life_window_tools"]),
             "runtime_dir": features["storage"]["runtime_dir"],
@@ -4141,9 +4236,17 @@ def _runtime_diagnostics_payload() -> dict:
         },
         "cadence_shared_runtime_isolation": features["storage"]["cadence_shared_runtime_isolation"],
         "critical_life_window_tools": manifest["critical_life_window_tools"],
+        "shared_only_mcp": {
+            "url": SHARED_ONLY_MCP_URL,
+            "path": SHARED_ONLY_MCP_PATH,
+            "tool_count": shared_manifest["expected_mcp_tool_count"],
+            "excluded_private_tool_count": shared_manifest["excluded_private_tool_count"],
+            "privacy_boundary": shared_manifest["privacy_boundary"],
+        },
         "endpoints": {
             "features": "/api/runtime/features",
             "tool_manifest": "/api/runtime/tool-manifest",
+            "shared_tool_manifest": "/api/runtime/shared-tool-manifest",
             "schema_expectations": "/api/runtime/schema-expectations",
             "diagnostics": "/api/runtime/diagnostics",
             "connector_check": "/api/runtime/connector-check",
@@ -4177,6 +4280,7 @@ def _runtime_diagnostics_payload() -> dict:
             "If schema_expectations lists an argument but the exposed tool lacks it, server supports it and connector schema is stale.",
             "If connector_check reports missing critical tools or arguments, reconnect the connector and retest.",
             "If a tool is absent from tool_manifest, inspect server registration/deployment first.",
+            "If Guyanshen only needs the living room, connect him to /shared/mcp, not /mcp.",
         ],
         "known_connector_lag": {
             "grow": "Connector may still expose only content while server supports source_platform/source_surface/source_window.",
@@ -4706,6 +4810,20 @@ async def api_runtime_tool_manifest(request):
     from starlette.responses import JSONResponse
 
     return JSONResponse(_runtime_tool_manifest_payload())
+
+
+@mcp.custom_route("/api/runtime/shared-tool-manifest", methods=["GET"])
+async def api_runtime_shared_tool_manifest(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(_runtime_shared_tool_manifest_payload())
+
+
+@mcp.custom_route("/shared/tool-manifest", methods=["GET"])
+async def api_shared_tool_manifest(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(_runtime_shared_tool_manifest_payload())
 
 
 @mcp.custom_route("/api/runtime/schema-expectations", methods=["GET"])
@@ -8430,6 +8548,47 @@ async def shared_travel_cabinet(limit: int = 50, traveler: str = "") -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+def _register_shared_only_mcp_tools() -> None:
+    for tool_name in SHARED_ONLY_EXPECTED_MCP_TOOLS:
+        tool_func = globals().get(tool_name)
+        if tool_func is None:
+            logger.warning(f"Shared-only MCP tool missing at registration: {tool_name}")
+            continue
+        shared_mcp.tool(name=tool_name)(tool_func)
+
+
+_register_shared_only_mcp_tools()
+
+
+async def _run_combined_streamable_http_async() -> None:
+    import uvicorn
+    from contextlib import asynccontextmanager
+    from starlette.applications import Starlette
+
+    private_app = mcp.streamable_http_app()
+    shared_app = shared_mcp.streamable_http_app()
+
+    @asynccontextmanager
+    async def lifespan(app):
+        async with mcp.session_manager.run():
+            async with shared_mcp.session_manager.run():
+                yield
+
+    starlette_app = Starlette(
+        debug=mcp.settings.debug,
+        routes=[*shared_app.routes, *private_app.routes],
+        lifespan=lifespan,
+    )
+    config = uvicorn.Config(
+        starlette_app,
+        host=mcp.settings.host,
+        port=mcp.settings.port,
+        log_level=mcp.settings.log_level.lower(),
+    )
+    server = uvicorn.Server(config)
+    await server.serve()
+
+
 # =============================================================
 # Tool 5: pulse — Heartbeat, system status + memory listing
 # 工具 5：pulse — 脉搏，系统状态 + 记忆列表
@@ -9908,7 +10067,12 @@ if __name__ == "__main__":
         cadence_thread = threading.Thread(target=_start_dual_cadence, daemon=True)
         cadence_thread.start()
 
-    mcp.run(transport=transport)
+    if transport == "streamable-http":
+        import anyio
+
+        anyio.run(_run_combined_streamable_http_async)
+    else:
+        mcp.run(transport=transport)
 
 
 
