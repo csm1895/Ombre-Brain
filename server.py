@@ -119,6 +119,7 @@ SHARED_ROOM_SEARCH_VERSION = "shared_room_search_v1"
 SHARED_ROOM_TIMELINE_VERSION = "shared_room_timeline_v1"
 SHARED_ROOM_STATS_VERSION = "shared_room_stats_v1"
 SHARED_ROOM_PRESENCE_VERSION = "shared_room_presence_v1"
+LOCAL_OLLAMA_WORKER_VERSION = "local_ollama_worker_v1"
 SHARED_CHANNEL_MAX_CONTENT_CHARS = 4000
 SHARED_SPACE_MAX_CONTENT_CHARS = 8000
 SHARED_SPACE_ALLOWED_SECTIONS = ("tech_shelf", "house_rules", "shared_memory", "todo")
@@ -166,6 +167,21 @@ SHARED_PET_VERSION = "shared_pet_v3"
 SHARED_PET_ALLOWED_ACTIONS = ("feed", "play", "pet", "clean", "checkin")
 SHARED_PET_ALLOWED_LOCATIONS = ("window_seat", "pet_nest", "coffee_table", "travel_cabinet", "living_room")
 SHARED_PET_MAX_PROFILE_CHARS = 4000
+_LOCAL_OLLAMA_CONFIG = config.get("local_ollama", {}) if isinstance(config.get("local_ollama", {}), dict) else {}
+LOCAL_OLLAMA_BASE_URL = os.environ.get(
+    "OMBRE_LOCAL_OLLAMA_BASE_URL",
+    str(_LOCAL_OLLAMA_CONFIG.get("base_url", "http://127.0.0.1:11434")),
+).rstrip("/")
+LOCAL_OLLAMA_MODEL = os.environ.get(
+    "OMBRE_LOCAL_OLLAMA_MODEL",
+    str(_LOCAL_OLLAMA_CONFIG.get("model", "qwen3:8b")),
+)
+LOCAL_OLLAMA_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("OMBRE_LOCAL_OLLAMA_TIMEOUT_SECONDS", "30")))
+_local_ollama_config_enabled = str(_LOCAL_OLLAMA_CONFIG.get("enabled", "1")).lower() in ("1", "true", "yes")
+LOCAL_OLLAMA_ENABLED = os.environ.get(
+    "OMBRE_LOCAL_OLLAMA_ENABLED",
+    "0" if os.environ.get("OMBRE_TRANSPORT", "").lower() == "streamable-http" else ("1" if _local_ollama_config_enabled else "0"),
+).lower() in ("1", "true", "yes")
 SHARED_PET_XIAOY_DEFAULT_PROFILE = {
     "origin_note": "小Y是月光玫瑰原生小兽，物种暂定叫月鸮狐。不是现实动物，也不是小起替身，是我们家客厅自己长出来的小生命。",
     "appearance": "掌心大，整体白色但不是纯白死白，带一点银蓝、月光蓝的冷调。远看像一小团会呼吸的月雾，近看能看到耳尖、翅缘和尾巴上有很浅的银蓝光。狐狸一样的尖耳朵，边缘有一点半透明绒光。眼睛大而偏圆，像小猫头鹰那种安静观察人的眼睛，夜里会有淡淡反光。背上有一对小猫头鹰翅膀，折起来像白银色小斗篷。身体有一点狐狸的灵巧感，脚爪很软，走在海玻璃旁边几乎没声音。尾巴是一小缕银蓝色月雾尾巴，走动时会轻轻拖出一点光影。",
@@ -264,6 +280,9 @@ RUNTIME_FEATURES = {
     "runtime_upstream_watch_mcp_tool": True,
     "runtime_source_routes_http_endpoint": True,
     "runtime_source_routes_mcp_tool": True,
+    "local_ollama_worker_http_endpoints": True,
+    "local_ollama_worker_mcp_tools": True,
+    "local_ollama_worker_local_only": True,
     "shared_channel_http_endpoints": True,
     "shared_channel_mcp_tools": True,
     "shared_channel_sender_whitelist": True,
@@ -308,7 +327,7 @@ RUNTIME_FEATURES = {
     "cadence_shared_runtime_isolation": True,
     "diary_review_duplicate_detection": True,
 }
-RUNTIME_FEATURES_VERSION = "2026-05-07.shared-room-auto-sensory-hourly-v1"
+RUNTIME_FEATURES_VERSION = "2026-05-07.local-ollama-worker-v1"
 RUNTIME_FEATURE_COMMITS = {
     "runtime_features_http_endpoint": "a4528ec",
     "runtime_features_mcp_tool": "self",
@@ -332,6 +351,9 @@ RUNTIME_FEATURE_COMMITS = {
     "runtime_upstream_watch_mcp_tool": "self",
     "runtime_source_routes_http_endpoint": "self",
     "runtime_source_routes_mcp_tool": "self",
+    "local_ollama_worker_http_endpoints": "self",
+    "local_ollama_worker_mcp_tools": "self",
+    "local_ollama_worker_local_only": "self",
     "shared_channel_http_endpoints": "self",
     "shared_channel_mcp_tools": "self",
     "shared_channel_sender_whitelist": "self",
@@ -399,6 +421,8 @@ RUNTIME_EXPECTED_MCP_TOOLS = [
     "runtime_features",
     "runtime_learning_intake",
     "runtime_life_window_check",
+    "local_ollama_status",
+    "local_ollama_generate",
     "runtime_night_diary_policy",
     "runtime_schema_expectations",
     "runtime_source_routes",
@@ -644,6 +668,17 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "required": [],
         "optional": [],
         "sections": list(SHARED_SPACE_ALLOWED_SECTIONS),
+    },
+    "local_ollama_status": {
+        "required": [],
+        "optional": [],
+        "local_only": True,
+    },
+    "local_ollama_generate": {
+        "required": ["prompt"],
+        "optional": ["task", "model", "max_chars"],
+        "local_only": True,
+        "write_scope": "candidate_only",
     },
     "shared_item_add": {
         "required": ["section", "title", "content", "sender"],
@@ -3999,6 +4034,120 @@ def _runtime_source_routes_payload() -> dict:
     }
 
 
+def _local_ollama_status_payload() -> dict:
+    payload = {
+        "status": "ok",
+        "version": LOCAL_OLLAMA_WORKER_VERSION,
+        "git_sha": _runtime_git_sha(),
+        "enabled": LOCAL_OLLAMA_ENABLED,
+        "local_only": True,
+        "base_url": LOCAL_OLLAMA_BASE_URL,
+        "default_model": LOCAL_OLLAMA_MODEL,
+        "write_scope": "candidate_only",
+        "main_brain_write": False,
+        "available": False,
+        "models": [],
+        "target_model_present": False,
+        "notes": [
+            "Ollama is expected to run on Qianqian's local Mac, not inside Zeabur.",
+            "Zeabur/remote runtime should normally report enabled=false unless explicitly configured.",
+            "Use this worker for summaries, tags, candidates, room sensory drafts, and calendar drafts first.",
+        ],
+    }
+    if not LOCAL_OLLAMA_ENABLED:
+        payload["status"] = "disabled"
+        payload["reason"] = "local_ollama_disabled"
+        return payload
+    try:
+        response = httpx.get(f"{LOCAL_OLLAMA_BASE_URL}/api/tags", timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        models = data.get("models", []) if isinstance(data, dict) else []
+        normalized = []
+        for model in models:
+            if not isinstance(model, dict):
+                continue
+            details = model.get("details") if isinstance(model.get("details"), dict) else {}
+            normalized.append({
+                "name": model.get("name", ""),
+                "size": model.get("size"),
+                "family": details.get("family", ""),
+                "parameter_size": details.get("parameter_size", ""),
+                "quantization_level": details.get("quantization_level", ""),
+            })
+        payload["available"] = True
+        payload["models"] = normalized
+        payload["target_model_present"] = any(item.get("name") == LOCAL_OLLAMA_MODEL for item in normalized)
+    except Exception as e:
+        payload["status"] = "unavailable"
+        payload["reason"] = str(e)[:200]
+    return payload
+
+
+def _local_ollama_generate_payload(
+    prompt: str,
+    task: str = "candidate整理",
+    model: str = "",
+    max_chars: int = 6000,
+) -> dict:
+    prompt = (prompt or "").strip()
+    task = (task or "candidate整理").strip()[:80]
+    model = (model or LOCAL_OLLAMA_MODEL).strip()[:80]
+    max_chars = max(100, min(int(max_chars or 6000), 12000))
+    if not prompt:
+        return {"status": "error", "error": "prompt is required", "main_brain_write": False}
+    if not LOCAL_OLLAMA_ENABLED:
+        return {
+            "status": "disabled",
+            "version": LOCAL_OLLAMA_WORKER_VERSION,
+            "reason": "local_ollama_disabled",
+            "local_only": True,
+            "main_brain_write": False,
+        }
+    bounded_prompt = prompt[:max_chars]
+    system_prefix = (
+        "你是 OmbreBrain 的本地小模型候选工人。"
+        "只做整理、摘要、标签、候选草稿，不写主脑，不做最终关系判断。"
+        "不要编造来源没有的事实。输出要短、可验收、可拒绝。\n\n"
+        f"task={task}\nwrite_scope=candidate_only\nmain_brain_write=false\n\n"
+    )
+    try:
+        response = httpx.post(
+            f"{LOCAL_OLLAMA_BASE_URL}/api/generate",
+            json={
+                "model": model,
+                "prompt": f"{system_prefix}{bounded_prompt}",
+                "stream": False,
+            },
+            timeout=LOCAL_OLLAMA_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return {
+            "status": "ok",
+            "version": LOCAL_OLLAMA_WORKER_VERSION,
+            "model": data.get("model", model) if isinstance(data, dict) else model,
+            "task": task,
+            "response": (data.get("response", "") if isinstance(data, dict) else "").strip(),
+            "thinking_present": bool(data.get("thinking")) if isinstance(data, dict) else False,
+            "prompt_chars": len(bounded_prompt),
+            "write_scope": "candidate_only",
+            "main_brain_write": False,
+            "auto_promotion": False,
+            "source": "local_ollama",
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "version": LOCAL_OLLAMA_WORKER_VERSION,
+            "error": str(e)[:200],
+            "model": model,
+            "task": task,
+            "write_scope": "candidate_only",
+            "main_brain_write": False,
+        }
+
+
 def _runtime_night_diary_policy_payload() -> dict:
     return {
         "status": "ok",
@@ -5309,6 +5458,37 @@ async def api_runtime_source_routes(request):
     from starlette.responses import JSONResponse
 
     return JSONResponse(_runtime_source_routes_payload())
+
+
+@mcp.custom_route("/api/local-ollama/status", methods=["GET"])
+async def api_local_ollama_status(request):
+    from starlette.responses import JSONResponse
+
+    _mark_system_event("local_ollama_status")
+    return JSONResponse(_local_ollama_status_payload())
+
+
+@mcp.custom_route("/api/local-ollama/generate", methods=["POST"])
+async def api_local_ollama_generate(request):
+    from starlette.responses import JSONResponse
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        max_chars = int(body.get("max_chars", 6000) or 6000)
+    except Exception:
+        max_chars = 6000
+    payload = _local_ollama_generate_payload(
+        prompt=str(body.get("prompt", "") or ""),
+        task=str(body.get("task", "candidate整理") or "candidate整理"),
+        model=str(body.get("model", "") or ""),
+        max_chars=max_chars,
+    )
+    _mark_system_event("local_ollama_generate")
+    status_code = 200 if payload.get("status") in ("ok", "disabled", "unavailable") else 400
+    return JSONResponse(payload, status_code=status_code)
 
 
 @mcp.custom_route("/shared/channel/status", methods=["GET"])
@@ -8488,6 +8668,34 @@ async def runtime_source_routes() -> str:
     """读取多平台来源字段约定，避免 ChatGPT/Codex/API/本地入口上下文串味。"""
     _mark_system_event("runtime_source_routes")
     return json.dumps(_runtime_source_routes_payload(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def local_ollama_status() -> str:
+    """读取本地 Ollama 小模型工人状态；本地候选层，只读。"""
+    _mark_system_event("local_ollama_status")
+    return json.dumps(_local_ollama_status_payload(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def local_ollama_generate(
+    prompt: str,
+    task: str = "candidate整理",
+    model: str = "",
+    max_chars: int = 6000,
+) -> str:
+    """调用本地 Ollama 生成候选整理结果；不写主脑，不自动晋升。"""
+    _mark_system_event("local_ollama_generate")
+    return json.dumps(
+        _local_ollama_generate_payload(
+            prompt=prompt,
+            task=task,
+            model=model,
+            max_chars=max_chars,
+        ),
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 @mcp.tool()
