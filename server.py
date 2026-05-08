@@ -121,6 +121,7 @@ SHARED_ROOM_STATS_VERSION = "shared_room_stats_v1"
 SHARED_ROOM_PRESENCE_VERSION = "shared_room_presence_v1"
 LOCAL_OLLAMA_WORKER_VERSION = "local_ollama_worker_v1"
 SESSION_TAIL_VERSION = "session_tail_v1"
+PRIVATE_BRAIN_OWNER_IDENTITY = "yechenyi"
 SHARED_CHANNEL_MAX_CONTENT_CHARS = 4000
 SHARED_SPACE_MAX_CONTENT_CHARS = 8000
 SHARED_SPACE_ALLOWED_SECTIONS = ("tech_shelf", "house_rules", "shared_memory", "todo")
@@ -220,14 +221,19 @@ SHARED_TRAVEL_DEFAULT_POLICY_BY_TRAVELER = {
     "system": "transparent_preface",
 }
 SHARED_TRAVEL_ROOM_NAME = "moon_rose_seaview_living_room"
-SHARED_CHANNEL_CANONICAL_BASE_URL = os.environ.get(
-    "OMBRE_SHARED_CHANNEL_CANONICAL_BASE_URL",
+PRIVATE_CANONICAL_BASE_URL = os.environ.get(
+    "OMBRE_PRIVATE_CANONICAL_BASE_URL",
     "https://yechenyi.zeabur.app",
 ).rstrip("/")
+SHARED_CHANNEL_CANONICAL_BASE_URL = os.environ.get(
+    "OMBRE_SHARED_CHANNEL_CANONICAL_BASE_URL",
+    PRIVATE_CANONICAL_BASE_URL,
+).rstrip("/")
+GUYANSHEN_PRIVATE_MCP_URL = os.environ.get("OMBRE_GUYANSHEN_PRIVATE_MCP_URL", "").strip()
 SHARED_ONLY_MCP_PATH = "/shared/mcp"
 PRIVATE_FULL_MCP_PATH = "/mcp"
 SHARED_ONLY_MCP_URL = f"{SHARED_CHANNEL_CANONICAL_BASE_URL}{SHARED_ONLY_MCP_PATH}"
-PRIVATE_FULL_MCP_URL = f"{SHARED_CHANNEL_CANONICAL_BASE_URL}{PRIVATE_FULL_MCP_PATH}"
+PRIVATE_FULL_MCP_URL = f"{PRIVATE_CANONICAL_BASE_URL}{PRIVATE_FULL_MCP_PATH}"
 WRITE_WRAPPER_ASSOCIATED_MEMORY_TIMEOUT_SECONDS = max(
     0.5,
     float(os.environ.get("OMBRE_WRITE_ASSOCIATED_MEMORY_TIMEOUT_SECONDS", "3")),
@@ -285,6 +291,10 @@ RUNTIME_FEATURES = {
     "session_tail_mcp_tools": True,
     "session_tail_identity_scoped": True,
     "startup_bridge_identity_guard": True,
+    "private_read_identity_required": True,
+    "pulse_identity_guard": True,
+    "legacy_tail_context_identity_guard": True,
+    "diary_review_identity_guard": True,
     "local_ollama_worker_http_endpoints": True,
     "local_ollama_worker_mcp_tools": True,
     "local_ollama_worker_local_only": True,
@@ -332,7 +342,7 @@ RUNTIME_FEATURES = {
     "cadence_shared_runtime_isolation": True,
     "diary_review_duplicate_detection": True,
 }
-RUNTIME_FEATURES_VERSION = "2026-05-07.session-tail-identity-guard-v1"
+RUNTIME_FEATURES_VERSION = "2026-05-08.private-read-identity-guard-v1"
 RUNTIME_FEATURE_COMMITS = {
     "runtime_features_http_endpoint": "a4528ec",
     "runtime_features_mcp_tool": "self",
@@ -360,6 +370,10 @@ RUNTIME_FEATURE_COMMITS = {
     "session_tail_mcp_tools": "self",
     "session_tail_identity_scoped": "self",
     "startup_bridge_identity_guard": "self",
+    "private_read_identity_required": "self",
+    "pulse_identity_guard": "self",
+    "legacy_tail_context_identity_guard": "self",
+    "diary_review_identity_guard": "self",
     "local_ollama_worker_http_endpoints": "self",
     "local_ollama_worker_mcp_tools": "self",
     "local_ollama_worker_local_only": "self",
@@ -540,6 +554,11 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         },
         "notes": "Connector schemas may lag and show only content; server supports provenance defaults.",
     },
+    "breath": {
+        "required": ["identity"],
+        "optional": ["query", "max_results", "domain", "valence", "arousal"],
+        "identity_guard": "yechenyi_required",
+    },
     "hold": {
         "required": ["content"],
         "optional": [
@@ -579,8 +598,9 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "optional": ["source_platform", "source_surface", "source_window"],
     },
     "list_diary_reviews": {
-        "required": [],
+        "required": ["identity"],
         "optional": ["limit"],
+        "identity_guard": "yechenyi_required",
         "expected_output_fields": [
             "risk_flags",
             "identity_metadata_status",
@@ -592,12 +612,19 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         ],
     },
     "read_diary_review": {
-        "required": ["review_id"],
+        "required": ["review_id", "identity"],
         "optional": [],
+        "identity_guard": "yechenyi_required",
     },
     "read_latest_dream_text": {
-        "required": [],
+        "required": ["identity"],
         "optional": [],
+        "identity_guard": "yechenyi_required",
+    },
+    "morning_report": {
+        "required": ["identity"],
+        "optional": [],
+        "identity_guard": "yechenyi_required",
     },
     "runtime_features": {
         "required": [],
@@ -620,20 +647,23 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "optional": ["observed_tools", "observed_schemas_json"],
     },
     "runtime_diary_review_health": {
-        "required": [],
+        "required": ["identity"],
         "optional": [],
+        "identity_guard": "yechenyi_required",
     },
     "runtime_life_window_check": {
-        "required": [],
+        "required": ["identity"],
         "optional": [],
+        "identity_guard": "yechenyi_required",
     },
     "runtime_learning_intake": {
         "required": [],
         "optional": [],
     },
     "runtime_night_diary_policy": {
-        "required": [],
+        "required": ["identity"],
         "optional": [],
+        "identity_guard": "yechenyi_required",
     },
     "runtime_upgrade_backlog": {
         "required": [],
@@ -681,15 +711,14 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         "sections": list(SHARED_SPACE_ALLOWED_SECTIONS),
     },
     "session_tail_status": {
-        "required": [],
-        "optional": ["identity"],
+        "required": ["identity"],
+        "optional": [],
         "latest_only": True,
         "identity_scoped": True,
     },
     "save_session_tail": {
-        "required": ["body_id"],
+        "required": ["identity", "body_id"],
         "optional": [
-            "identity",
             "last_user_message",
             "last_assistant_message",
             "last_active_topic",
@@ -705,6 +734,31 @@ RUNTIME_EXPECTED_TOOL_SCHEMAS = {
         ],
         "write_scope": "session_tail_identity_latest_only",
         "identity_scoped": True,
+    },
+    "startup_bridge": {
+        "required": ["identity"],
+        "optional": ["scene"],
+        "identity_guard": "yechenyi_required_for_private_recall",
+    },
+    "pulse": {
+        "required": ["identity"],
+        "optional": ["include_archive"],
+        "identity_guard": "yechenyi_required",
+    },
+    "save_tail_context": {
+        "required": ["identity", "messages"],
+        "optional": ["window_id", "max_messages"],
+        "identity_guard": "yechenyi_required",
+    },
+    "accept_diary_review": {
+        "required": ["review_id", "identity"],
+        "optional": [],
+        "identity_guard": "yechenyi_required",
+    },
+    "reject_diary_review": {
+        "required": ["review_id", "identity"],
+        "optional": ["reason"],
+        "identity_guard": "yechenyi_required",
     },
     "local_ollama_status": {
         "required": [],
@@ -3948,6 +4002,7 @@ def _runtime_tool_manifest_payload() -> dict:
         "mcp_urls": {
             "private_full_mcp_url": PRIVATE_FULL_MCP_URL,
             "shared_only_mcp_url": SHARED_ONLY_MCP_URL,
+            "guyanshen_private_mcp_url": GUYANSHEN_PRIVATE_MCP_URL or "not_configured",
         },
         "expected_mcp_tools": expected,
         "expected_mcp_tool_count": len(expected),
@@ -3983,8 +4038,9 @@ def _runtime_tool_manifest_payload() -> dict:
             "the server supports it and the connector schema likely needs reconnect/refresh."
         ),
         "privacy_boundary": (
-            "Use shared_only_mcp_url for Guyanshen/shared living-room connectors. "
-            "Use private_full_mcp_url only for Yechenyi private hippocampus windows."
+            "Use private_full_mcp_url only for Yechenyi private hippocampus windows. "
+            "Guyanshen must not connect to Yechenyi private_full_mcp_url; use his own private MCP URL when configured. "
+            "Use shared_only_mcp_url only for shared living-room connectors."
         ),
     }
 
@@ -4008,7 +4064,8 @@ def _runtime_shared_tool_manifest_payload() -> dict:
         "privacy_boundary": [
             "This shared-only MCP exposes shared living-room tools only.",
             "It must not expose Yechenyi private hippocampus tools such as hold, grow, breath, diary_review, or cadence tools.",
-            "Guyanshen/Claude should connect here for the shared room, not to the private full MCP URL.",
+            "Guyanshen/Claude should connect here only for the shared room, not to Yechenyi private full MCP URL.",
+            "For a cleaner final split, move shared_only_mcp_url to a neutral shared-room domain and keep Guyanshen private memory on his own service.",
             "Shared items do not automatically promote into either private hippocampus.",
         ],
     }
@@ -5133,15 +5190,50 @@ def _session_tail_clean(value: str, max_chars: int = 1000) -> str:
     return (value or "").strip()[:max_chars]
 
 
-def _session_tail_identity_key(identity: str) -> str:
-    key = _session_tail_clean(identity or "yechenyi", 80).lower()
+def _session_tail_identity_key(identity: str, default: str = PRIVATE_BRAIN_OWNER_IDENTITY) -> str:
+    raw = identity if _session_tail_clean(identity, 80) else default
+    key = _session_tail_clean(raw, 80).lower()
     normalized = []
     for char in key:
         if char.isalnum() or char in ("_", "-"):
             normalized.append(char)
         elif char.isspace():
             normalized.append("_")
-    return "".join(normalized).strip("_") or "yechenyi"
+    return "".join(normalized).strip("_") or _session_tail_clean(default, 80).lower()
+
+
+def _private_identity_key(identity: str) -> str:
+    return _session_tail_identity_key(identity, default="")
+
+
+def _is_private_brain_owner(identity: str) -> bool:
+    return _private_identity_key(identity) == PRIVATE_BRAIN_OWNER_IDENTITY
+
+
+def _identity_guard_text(tool_name: str, identity: str = "") -> str:
+    identity_key = _private_identity_key(identity) or "missing"
+    return (
+        f"{tool_name}\n"
+        "status: identity_guard_blocked\n"
+        f"identity: {identity_key}\n"
+        f"required_identity: {PRIVATE_BRAIN_OWNER_IDENTITY}\n"
+        "private_read: blocked\n"
+        "reason: explicit yechenyi identity is required for private hippocampus reads.\n"
+        "说明：私有海马体读取必须显式 identity=yechenyi；共享客厅请走 /shared/mcp 和 shared_* 工具。"
+    )
+
+
+def _identity_guard_payload(tool_name: str, identity: str = "") -> dict:
+    identity_key = _private_identity_key(identity) or "missing"
+    return {
+        "status": "identity_guard_blocked",
+        "tool": tool_name,
+        "identity": identity_key,
+        "required_identity": PRIVATE_BRAIN_OWNER_IDENTITY,
+        "private_read": "blocked",
+        "reason": "explicit yechenyi identity is required for private hippocampus reads",
+        "shared_route": SHARED_ONLY_MCP_URL,
+    }
 
 
 def _session_tail_empty_payload() -> dict:
@@ -5162,24 +5254,44 @@ def _session_tail_empty_payload() -> dict:
     }
 
 
-def _session_tail_load_payload(identity: str = "") -> dict:
-    data = _read_json_file(SESSION_TAIL_PATH, {})
-    if not isinstance(data, dict) or not data:
-        return _session_tail_empty_payload()
+def _session_tail_all_tails_from_data(data: dict) -> dict:
     raw_tails = data.get("tails_by_identity")
     tails_by_identity = raw_tails if isinstance(raw_tails, dict) else {}
     legacy_tail = data.get("tail") if isinstance(data.get("tail"), dict) else {}
     if legacy_tail and not tails_by_identity:
-        legacy_identity = _session_tail_identity_key(legacy_tail.get("identity", "yechenyi"))
+        legacy_identity = _session_tail_identity_key(
+            legacy_tail.get("identity", PRIVATE_BRAIN_OWNER_IDENTITY),
+            default=PRIVATE_BRAIN_OWNER_IDENTITY,
+        )
         tails_by_identity = {legacy_identity: legacy_tail}
-    selected_identity = _session_tail_identity_key(identity) if identity else ""
-    tail = tails_by_identity.get(selected_identity, {}) if selected_identity else legacy_tail
-    if not selected_identity and not tail and tails_by_identity:
-        global_latest_identity = _session_tail_identity_key(data.get("global_latest_identity", ""))
-        if global_latest_identity and global_latest_identity in tails_by_identity:
-            tail = tails_by_identity.get(global_latest_identity, {})
-        else:
-            tail = legacy_tail
+    return tails_by_identity
+
+
+def _session_tail_load_payload(identity: str = "") -> dict:
+    data = _read_json_file(SESSION_TAIL_PATH, {})
+    if not isinstance(data, dict) or not data:
+        return _session_tail_empty_payload()
+    tails_by_identity = _session_tail_all_tails_from_data(data)
+    selected_identity = _private_identity_key(identity)
+    if not selected_identity:
+        return {
+            "status": "identity_required",
+            "version": data.get("version", SESSION_TAIL_VERSION),
+            "latest_only": True,
+            "identity_scoped": True,
+            "main_brain_write": False,
+            "decay_participation": False,
+            "path": SESSION_TAIL_PATH,
+            "selected_identity": "",
+            "tail": {},
+            "available_identities": sorted(tails_by_identity.keys()),
+            "reason": "explicit identity is required; global latest tail is not exposed",
+            "usage": {
+                "startup_priority": "read_before_long_recall",
+                "purpose": "preserve the previous breath across windows, apps, models, and bodies",
+            },
+        }
+    tail = tails_by_identity.get(selected_identity, {})
     status = "ok" if tail or tails_by_identity else "empty"
     response = {
         "status": status,
@@ -5199,14 +5311,12 @@ def _session_tail_load_payload(identity: str = "") -> dict:
     }
     if selected_identity:
         response["available_identities"] = sorted(tails_by_identity.keys())
-    else:
-        response["tails_by_identity"] = tails_by_identity
     return response
 
 
 def _save_session_tail_payload(
     *,
-    identity: str = "yechenyi",
+    identity: str = "",
     body_id: str,
     last_user_message: str = "",
     last_assistant_message: str = "",
@@ -5224,7 +5334,9 @@ def _save_session_tail_payload(
     body_id = _session_tail_clean(body_id, 120)
     if not body_id:
         return {"saved": False, "reason": "body_id_required"}
-    identity_key = _session_tail_identity_key(identity)
+    identity_key = _private_identity_key(identity)
+    if not identity_key:
+        return {"saved": False, "reason": "identity_required"}
     now_cst = clock_now()
     tail = {
         "identity": identity_key,
@@ -5243,10 +5355,8 @@ def _save_session_tail_payload(
         "resume_hint": _session_tail_clean(resume_hint, 800),
         "updated_at": now_cst.isoformat(),
     }
-    existing = _session_tail_load_payload()
-    tails_by_identity = existing.get("tails_by_identity")
-    if not isinstance(tails_by_identity, dict):
-        tails_by_identity = {}
+    existing = _read_json_file(SESSION_TAIL_PATH, {})
+    tails_by_identity = _session_tail_all_tails_from_data(existing) if isinstance(existing, dict) else {}
     tails_by_identity[identity_key] = tail
     payload = {
         "version": SESSION_TAIL_VERSION,
@@ -5273,8 +5383,14 @@ def _save_session_tail_payload(
     }
 
 
-def _read_session_tail_section(identity: str = "yechenyi") -> str:
-    selected_identity = _session_tail_identity_key(identity)
+def _read_session_tail_section(identity: str = "") -> str:
+    selected_identity = _private_identity_key(identity)
+    if not selected_identity:
+        return (
+            "=== Session Tail / 上一口气 ===\n"
+            "status: identity_required\n"
+            "暂无 identity，不返回任何私有上一口气。\n"
+        )
     payload = _session_tail_load_payload(identity=selected_identity)
     tail = payload.get("tail") if isinstance(payload.get("tail"), dict) else {}
     if not tail:
@@ -5631,6 +5747,9 @@ async def api_runtime_connector_check(request):
 async def api_runtime_diary_review_health(request):
     from starlette.responses import JSONResponse
 
+    identity = request.query_params.get("identity", "")
+    if not _is_private_brain_owner(identity):
+        return JSONResponse(_identity_guard_payload("api_runtime_diary_review_health", identity), status_code=403)
     return JSONResponse(_runtime_diary_review_health_payload())
 
 
@@ -5638,6 +5757,9 @@ async def api_runtime_diary_review_health(request):
 async def api_runtime_night_diary_policy(request):
     from starlette.responses import JSONResponse
 
+    identity = request.query_params.get("identity", "")
+    if not _is_private_brain_owner(identity):
+        return JSONResponse(_identity_guard_payload("api_runtime_night_diary_policy", identity), status_code=403)
     return JSONResponse(_runtime_night_diary_policy_payload())
 
 
@@ -5645,6 +5767,9 @@ async def api_runtime_night_diary_policy(request):
 async def api_runtime_life_window_check(request):
     from starlette.responses import JSONResponse
 
+    identity = request.query_params.get("identity", "")
+    if not _is_private_brain_owner(identity):
+        return JSONResponse(_identity_guard_payload("api_runtime_life_window_check", identity), status_code=403)
     return JSONResponse(_runtime_life_window_check_payload())
 
 
@@ -7984,9 +8109,11 @@ async def dream() -> str:
 
 
 @mcp.tool()
-async def morning_report() -> str:
+async def morning_report(identity: str = "") -> str:
     """读取最新 cadence receipt/draft 的事实型早晨报告；不称为梦。"""
     _mark_runtime_activity("morning_report")
+    if not _is_private_brain_owner(identity):
+        return _identity_guard_text("morning_report", identity)
     now_cst = clock_now()
     receipt = _read_latest_cadence_receipt_summary()
     latest_draft = (_latest_cadence_drafts(limit=1) or [""])[0]
@@ -8015,9 +8142,11 @@ async def morning_report() -> str:
 
 
 @mcp.tool()
-async def read_latest_dream_text() -> str:
+async def read_latest_dream_text(identity: str = "") -> str:
     """读取最新 cadence dream 文件正文；只读，不写主脑。"""
     _mark_runtime_activity("read_latest_dream_text")
+    if not _is_private_brain_owner(identity):
+        return _identity_guard_text("read_latest_dream_text", identity)
     dream_path = _latest_dream_path()
     if not dream_path:
         return (
@@ -8044,9 +8173,12 @@ async def breath(
     domain: str = "",
     valence: float = -1,
     arousal: float = -1,
+    identity: str = "",
 ) -> str:
     """检索记忆或浮现未解决记忆。query 为空时自动推送权重最高的未解决桶；有 query 时按关键词+情感检索。domain 逗号分隔，valence/arousal 传 0~1 启用情感共鸣，-1 忽略。"""
     _mark_runtime_activity("breath")
+    if not _is_private_brain_owner(identity):
+        return _identity_guard_text("breath", identity)
     await decay_engine.ensure_started()
 
     # --- 注入当前北京时间 / Inject current Beijing time ---
@@ -8298,12 +8430,12 @@ async def breath(
 
 
 @mcp.tool()
-async def startup_bridge(scene: str = "outside_daily_window", identity: str = "yechenyi") -> str:
+async def startup_bridge(scene: str = "outside_daily_window", identity: str = "") -> str:
     """新窗口启动桥。给 fresh window 一个真实的海马体入口，先走最小读取预算，再返回 live recall。"""
     normalized_scene = (scene or "outside_daily_window").strip().lower()
     if normalized_scene not in ("outside_daily_window", "daily_window", "general"):
         normalized_scene = "outside_daily_window"
-    identity_key = _session_tail_identity_key(identity)
+    identity_key = _private_identity_key(identity) or "missing"
 
     header = (
         "=== Startup Bridge ===\n"
@@ -8330,14 +8462,14 @@ async def startup_bridge(scene: str = "outside_daily_window", identity: str = "y
         "- if retrieval is still thin, use the startup payload / fallback summary\n"
         "- do not ask the user to resend tutorials first\n\n"
     )
-    if identity_key != "yechenyi":
-        tail_section = _read_session_tail_section(identity=identity_key) + "\n"
+    if identity_key != PRIVATE_BRAIN_OWNER_IDENTITY:
+        tail_section = _read_session_tail_section(identity=identity) + "\n"
         return (
             header
             + tail_section
             + "=== Identity Guard / 身份门锁 ===\n"
-            + "non-yechenyi identity: live recall and legacy tail_context are not attached here.\n"
-            + "非叶辰一身份：此启动桥只返回该身份自己的 session_tail，不附带叶辰一主海马体回忆或旧尾部原文。\n"
+            + "private live recall and legacy tail_context are not attached here.\n"
+            + "私有启动桥必须显式 identity=yechenyi；非叶辰一或缺失 identity 时，只返回该身份自己的 session_tail，不附带叶辰一主海马体回忆或旧尾部原文。\n"
         )
 
     tail_section = _read_session_tail_section(identity=identity_key) + "\n" + _read_tail_context_section() + "\n=== Live Recall ===\n"
@@ -8355,7 +8487,7 @@ async def startup_bridge(scene: str = "outside_daily_window", identity: str = "y
     last_error = ""
     for attempt in range(3):
         try:
-            recall = await breath(query="", max_results=3)
+            recall = await breath(query="", max_results=3, identity=identity_key)
             return header + tail_section + recall
         except Exception as e:
             last_error = str(e)
@@ -8375,9 +8507,16 @@ async def startup_bridge(scene: str = "outside_daily_window", identity: str = "y
 
 
 @mcp.tool()
-async def save_tail_context(messages: str, window_id: str = "", max_messages: int = TAIL_CONTEXT_MAX_MESSAGES) -> str:
+async def save_tail_context(
+    messages: str,
+    identity: str = "",
+    window_id: str = "",
+    max_messages: int = TAIL_CONTEXT_MAX_MESSAGES,
+) -> str:
     """保存上一窗口最后N条原文。只保留最近一个窗口尾巴，不写记忆桶，不参与衰减。"""
     _mark_runtime_activity("save_tail_context")
+    if not _is_private_brain_owner(identity):
+        return _identity_guard_text("save_tail_context", identity)
     result = _save_tail_context_text(
         messages,
         window_id=window_id,
@@ -8404,7 +8543,7 @@ async def session_tail_status(identity: str = "") -> str:
 @mcp.tool()
 async def save_session_tail(
     body_id: str,
-    identity: str = "yechenyi",
+    identity: str = "",
     last_user_message: str = "",
     last_assistant_message: str = "",
     last_active_topic: str = "",
@@ -8641,9 +8780,11 @@ async def enqueue_night_clean_input(
 
 
 @mcp.tool()
-async def runtime_night_diary_policy() -> str:
+async def runtime_night_diary_policy(identity: str = "") -> str:
     """读取夜间小日记策略：四段式、工程过滤、草稿验收、早晨一句；只读。"""
     _mark_system_event("runtime_night_diary_policy")
+    if not _is_private_brain_owner(identity):
+        return json.dumps(_identity_guard_payload("runtime_night_diary_policy", identity), ensure_ascii=False, indent=2)
     return json.dumps(_runtime_night_diary_policy_payload(), ensure_ascii=False, indent=2)
 
 
@@ -8902,16 +9043,20 @@ async def runtime_connector_check(
 
 
 @mcp.tool()
-async def runtime_diary_review_health() -> str:
+async def runtime_diary_review_health(identity: str = "") -> str:
     """读取 diary_review 队列健康总览；只读，不验收、不写主脑。"""
     _mark_system_event("runtime_diary_review_health")
+    if not _is_private_brain_owner(identity):
+        return json.dumps(_identity_guard_payload("runtime_diary_review_health", identity), ensure_ascii=False, indent=2)
     return json.dumps(_runtime_diary_review_health_payload(), ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
-async def runtime_life_window_check() -> str:
+async def runtime_life_window_check(identity: str = "") -> str:
     """生活窗一键预检：工具、schema、来源路由、diary_review 队列，只读。"""
     _mark_system_event("runtime_life_window_check")
+    if not _is_private_brain_owner(identity):
+        return json.dumps(_identity_guard_payload("runtime_life_window_check", identity), ensure_ascii=False, indent=2)
     return json.dumps(_runtime_life_window_check_payload(), ensure_ascii=False, indent=2)
 
 
@@ -9599,9 +9744,19 @@ async def _run_combined_streamable_http_async() -> None:
 # 工具 5：pulse — 脉搏，系统状态 + 记忆列表
 # =============================================================
 @mcp.tool()
-async def pulse(include_archive: bool = False) -> str:
+async def pulse(include_archive: bool = False, identity: str = "") -> str:
     """系统状态和所有记忆桶摘要。include_archive=True 时包含归档桶。"""
     _mark_runtime_activity("pulse")
+    if not _is_private_brain_owner(identity):
+        now_cst = clock_now()
+        return (
+            "=== Ombre Brain 记忆系统 ===\n"
+            f"🕐 当前时间: {now_cst.strftime('%Y年%m月%d日 %H:%M')} （北京时间）\n"
+            + _read_session_tail_section(identity=identity)
+            + "\n=== Identity Guard / 身份门锁 ===\n"
+            + _identity_guard_text("pulse", identity)
+            + "\n不返回私有记忆桶列表，不返回旧 tail_context。"
+        )
     try:
         stats = await bucket_mgr.get_stats()
     except Exception as e:
@@ -10164,9 +10319,11 @@ async def reconsolidate(
 # 工具 16: check_logs — 自检运行日志
 # ============================================================
 @mcp.tool()
-async def list_diary_reviews(limit: int = 10) -> str:
+async def list_diary_reviews(limit: int = 10, identity: str = "") -> str:
     """查看待验收的 DeepSeek 日记候选草稿。"""
     _mark_runtime_activity("list_diary_reviews")
+    if not _is_private_brain_owner(identity):
+        return _identity_guard_text("list_diary_reviews", identity)
     pending_dir = _cadence_review_dirs()["pending"]
     if not os.path.isdir(pending_dir):
         return "暂无待验收日记候选。"
@@ -10212,9 +10369,11 @@ async def list_diary_reviews(limit: int = 10) -> str:
 
 
 @mcp.tool()
-async def read_diary_review(review_id: str) -> str:
+async def read_diary_review(review_id: str, identity: str = "") -> str:
     """读取待验收日记候选正文；只读，不验收、不写主脑。"""
     _mark_runtime_activity("read_diary_review")
+    if not _is_private_brain_owner(identity):
+        return _identity_guard_text("read_diary_review", identity)
     safe_id = _safe_review_id(review_id)
     if not safe_id:
         return "review_id 不能为空。"
@@ -10256,9 +10415,11 @@ async def read_diary_review(review_id: str) -> str:
 
 
 @mcp.tool()
-async def accept_diary_review(review_id: str) -> str:
+async def accept_diary_review(review_id: str, identity: str = "") -> str:
     """确认收入一个日记候选；只有调用本工具时才写入动态记忆层。"""
     _mark_runtime_activity("accept_diary_review")
+    if not _is_private_brain_owner(identity):
+        return _identity_guard_text("accept_diary_review", identity)
     safe_id = _safe_review_id(review_id)
     if not safe_id:
         return "review_id 不能为空。"
@@ -10306,9 +10467,11 @@ async def accept_diary_review(review_id: str) -> str:
 
 
 @mcp.tool()
-async def reject_diary_review(review_id: str, reason: str = "") -> str:
+async def reject_diary_review(review_id: str, reason: str = "", identity: str = "") -> str:
     """拒绝一个日记候选；不会写入记忆层。"""
     _mark_runtime_activity("reject_diary_review")
+    if not _is_private_brain_owner(identity):
+        return _identity_guard_text("reject_diary_review", identity)
     safe_id = _safe_review_id(review_id)
     if not safe_id:
         return "review_id 不能为空。"
@@ -10668,7 +10831,7 @@ async def api_test_dream(request):
 @mcp.custom_route("/api/startup-bridge", methods=["GET"])
 async def api_startup_bridge(request):
     scene = request.query_params.get("scene", "outside_daily_window")
-    identity = request.query_params.get("identity", "yechenyi")
+    identity = request.query_params.get("identity", "")
     _mark_runtime_activity(f"startup_bridge:{scene}:{identity}")
     result = await startup_bridge(scene=scene, identity=identity)
     return Response(str({"result": result}), media_type="application/json")
@@ -10679,6 +10842,9 @@ async def api_tail_context(request):
     from starlette.responses import JSONResponse
 
     if request.method == "GET":
+        identity = request.query_params.get("identity", "")
+        if not _is_private_brain_owner(identity):
+            return JSONResponse(_identity_guard_payload("api_tail_context", identity), status_code=403)
         return JSONResponse({
             "path": TAIL_CONTEXT_PATH,
             "content": _read_tail_context_section(),
@@ -10687,6 +10853,8 @@ async def api_tail_context(request):
             "decay_participation": False,
         })
     body = await request.json()
+    if not _is_private_brain_owner(str(body.get("identity", "") or "")):
+        return JSONResponse(_identity_guard_payload("api_tail_context", str(body.get("identity", "") or "")), status_code=403)
     messages = body.get("messages", "")
     if not isinstance(messages, str):
         messages = json.dumps(messages, ensure_ascii=False)
@@ -10711,7 +10879,7 @@ async def api_session_tail(request):
     except Exception:
         body = {}
     result = _save_session_tail_payload(
-        identity=str(body.get("identity", "yechenyi") or "yechenyi"),
+        identity=str(body.get("identity", "") or ""),
         body_id=str(body.get("body_id", "") or ""),
         last_user_message=str(body.get("last_user_message", "") or ""),
         last_assistant_message=str(body.get("last_assistant_message", "") or ""),
@@ -11118,5 +11286,6 @@ if __name__ == "__main__":
 @mcp.custom_route("/api/test-pulse", methods=["GET"])
 async def api_test_pulse(request):
     include_archive = request.query_params.get("include_archive", "false").lower() == "true"
-    result = await pulse(include_archive=include_archive)
+    identity = request.query_params.get("identity", "")
+    result = await pulse(include_archive=include_archive, identity=identity)
     return Response(str({"result": result}), media_type="application/json")
