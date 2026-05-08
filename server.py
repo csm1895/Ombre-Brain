@@ -122,6 +122,8 @@ SHARED_ROOM_PRESENCE_VERSION = "shared_room_presence_v1"
 LOCAL_OLLAMA_WORKER_VERSION = "local_ollama_worker_v1"
 SESSION_TAIL_VERSION = "session_tail_v1"
 PRIVATE_BRAIN_OWNER_IDENTITY = "yechenyi"
+SERVICE_MODE = os.environ.get("OMBRE_SERVICE_MODE", "private_full").strip().lower() or "private_full"
+SHARED_ROOM_ONLY_SERVICE_MODES = {"shared_room_only", "shared-only", "shared_only", "shared_room"}
 SHARED_CHANNEL_MAX_CONTENT_CHARS = 4000
 SHARED_SPACE_MAX_CONTENT_CHARS = 8000
 SHARED_SPACE_ALLOWED_SECTIONS = ("tech_shelf", "house_rules", "shared_memory", "todo")
@@ -294,6 +296,7 @@ RUNTIME_FEATURES = {
     "private_read_identity_required": True,
     "pulse_identity_guard": True,
     "guarded_pulse_http_endpoint": True,
+    "shared_room_only_service_mode": True,
     "legacy_tail_context_identity_guard": True,
     "diary_review_identity_guard": True,
     "local_ollama_worker_http_endpoints": True,
@@ -343,7 +346,7 @@ RUNTIME_FEATURES = {
     "cadence_shared_runtime_isolation": True,
     "diary_review_duplicate_detection": True,
 }
-RUNTIME_FEATURES_VERSION = "2026-05-08.private-read-identity-guard-v2"
+RUNTIME_FEATURES_VERSION = "2026-05-08.shared-room-only-service-mode-v1"
 RUNTIME_FEATURE_COMMITS = {
     "runtime_features_http_endpoint": "a4528ec",
     "runtime_features_mcp_tool": "self",
@@ -374,6 +377,7 @@ RUNTIME_FEATURE_COMMITS = {
     "private_read_identity_required": "self",
     "pulse_identity_guard": "self",
     "guarded_pulse_http_endpoint": "self",
+    "shared_room_only_service_mode": "self",
     "legacy_tail_context_identity_guard": "self",
     "diary_review_identity_guard": "self",
     "local_ollama_worker_http_endpoints": "self",
@@ -3962,6 +3966,8 @@ def _runtime_features_payload() -> dict:
     return {
         "status": "ok",
         "features_version": RUNTIME_FEATURES_VERSION,
+        "service_mode": SERVICE_MODE,
+        "shared_room_only": SERVICE_MODE in SHARED_ROOM_ONLY_SERVICE_MODES,
         "features": RUNTIME_FEATURES,
         "feature_commits": RUNTIME_FEATURE_COMMITS,
         "git_sha": _runtime_git_sha(),
@@ -3975,6 +3981,10 @@ def _runtime_features_payload() -> dict:
             "cadence_shared_runtime_isolation": _cadence_shared_runtime_isolation_payload(),
         },
         "schema_notes": {
+            "service_mode": (
+                "Set OMBRE_SERVICE_MODE=shared_room_only for a neutral shared-room service "
+                "that exposes only /shared/*, /shared/mcp, /health, /ready, and shared manifests."
+            ),
             "grow_optional_source_fields": "server_supported; connector_schema_may_lag",
             "write_after_read": "associated_memories returned by routed writes",
             "diagnostics_endpoint": "/api/runtime/diagnostics",
@@ -9720,6 +9730,27 @@ async def _run_combined_streamable_http_async() -> None:
     private_app = mcp.streamable_http_app()
     shared_app = shared_mcp.streamable_http_app()
 
+    def _route_path(route) -> str:
+        return str(getattr(route, "path", "") or "")
+
+    def _shared_room_route_allowed(route) -> bool:
+        path = _route_path(route)
+        return (
+            path.startswith("/shared/")
+            or path == "/shared"
+            or path in {
+                "/health",
+                "/ready",
+                "/api/runtime/features",
+                "/api/runtime/shared-tool-manifest",
+            }
+        )
+
+    shared_room_only = SERVICE_MODE in SHARED_ROOM_ONLY_SERVICE_MODES
+    private_routes = list(private_app.routes)
+    if shared_room_only:
+        private_routes = [route for route in private_routes if _shared_room_route_allowed(route)]
+
     @asynccontextmanager
     async def lifespan(app):
         async with mcp.session_manager.run():
@@ -9728,9 +9759,14 @@ async def _run_combined_streamable_http_async() -> None:
 
     starlette_app = Starlette(
         debug=mcp.settings.debug,
-        routes=[*shared_app.routes, *private_app.routes],
+        routes=[*shared_app.routes, *private_routes],
         lifespan=lifespan,
     )
+    if shared_room_only:
+        logger.info(
+            "Ombre Brain shared-room-only service mode active | "
+            f"routes={len(starlette_app.routes)} private_mcp_mounted=false"
+        )
     config = uvicorn.Config(
         starlette_app,
         host=mcp.settings.host,
