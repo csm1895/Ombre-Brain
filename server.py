@@ -10899,6 +10899,14 @@ async def api_session_tail(request):
     return JSONResponse(result, status_code=status_code)
 
 
+@mcp.custom_route("/api/pulse", methods=["GET"])
+async def api_pulse(request):
+    include_archive = request.query_params.get("include_archive", "false").lower() == "true"
+    identity = request.query_params.get("identity", "")
+    result = await pulse(include_archive=include_archive, identity=identity)
+    return Response(str({"result": result}), media_type="application/json")
+
+
 def _api_notes_file():
     from pathlib import Path
     import os
