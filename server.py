@@ -293,6 +293,7 @@ RUNTIME_FEATURES = {
     "startup_bridge_identity_guard": True,
     "private_read_identity_required": True,
     "pulse_identity_guard": True,
+    "guarded_pulse_http_endpoint": True,
     "legacy_tail_context_identity_guard": True,
     "diary_review_identity_guard": True,
     "local_ollama_worker_http_endpoints": True,
@@ -342,7 +343,7 @@ RUNTIME_FEATURES = {
     "cadence_shared_runtime_isolation": True,
     "diary_review_duplicate_detection": True,
 }
-RUNTIME_FEATURES_VERSION = "2026-05-08.private-read-identity-guard-v1"
+RUNTIME_FEATURES_VERSION = "2026-05-08.private-read-identity-guard-v2"
 RUNTIME_FEATURE_COMMITS = {
     "runtime_features_http_endpoint": "a4528ec",
     "runtime_features_mcp_tool": "self",
@@ -372,6 +373,7 @@ RUNTIME_FEATURE_COMMITS = {
     "startup_bridge_identity_guard": "self",
     "private_read_identity_required": "self",
     "pulse_identity_guard": "self",
+    "guarded_pulse_http_endpoint": "self",
     "legacy_tail_context_identity_guard": "self",
     "diary_review_identity_guard": "self",
     "local_ollama_worker_http_endpoints": "self",
